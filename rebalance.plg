@@ -3,7 +3,7 @@
   <!ENTITY name       "rebalance">
   <!ENTITY author     "SteveLocal">
   <!ENTITY version    "2026.04.16">
-  <!ENTITY pluginURL  "file:///boot/config/plugins/rebalance/rebalance.plg">
+  <!ENTITY pluginURL  "https://raw.githubusercontent.com/Esteban4u/ReBalance/main/rebalance.plg">
   <!ENTITY pluginDir  "/usr/local/emhttp/plugins/rebalance">
 ]>
 
@@ -45,7 +45,7 @@
 
 <!-- ── Step 1: copy tarball from boot drive (already placed there by user) ── -->
 <FILE Name="/boot/config/plugins/rebalance/rebalance.tar.gz">
-  <URL>/boot/config/plugins/rebalance/rebalance.tar.gz</URL>
+  <URL>https://github.com/Esteban4u/ReBalance/releases/download/2026.04.18/rebalance.tar.gz</URL>
 </FILE>
 
 <!-- ── Step 2: unpack and configure ───────────────────────────────────────── -->
