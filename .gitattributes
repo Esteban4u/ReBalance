@@ -1,0 +1,7 @@
+# Force Unix line endings for all files that run on Linux (Unraid)
+*.sh    text eol=lf
+*.php   text eol=lf
+*.page  text eol=lf
+*.plg   text eol=lf
+*.md    text eol=lf
+*.svg   text eol=lf

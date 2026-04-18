@@ -1,0 +1,856 @@
+Menu="Utilities"
+Title="ReBalance"
+Tag="balance-scale"
+Icon="images/rebalance.png"
+---
+<?php
+/* ReBalance — Unraid Array Disk Usage Balancer */
+$plugin  = "rebalance";
+$docroot = $docroot ?? $_SERVER['DOCUMENT_ROOT'] ?: '/usr/local/emhttp';
+$var     = @parse_ini_file('/var/local/emhttp/var.ini') ?: [];
+$csrf    = $var['csrf_token'] ?? '';
+?>
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+/* ── CSS variables — light (default) ─────────────────────────────────────── */
+:root {
+    --bg:          #ffffff;
+    --bg-alt:      #f8f9fa;
+    --bg-header:   #f0f0f0;
+    --border:      #ddd;
+    --border-card: #dee2e6;
+    --text:        #333;
+    --text-muted:  #666;
+    --text-faint:  #888;
+    --text-label:  #555;
+    --h-border:    #ccc;
+    --bar-track:   #e0e0e0;
+    --bar-target:  #333;
+    --row-source:  #fff0f0;
+    --row-dest:    #f0fff0;
+    --row-bal:     #ffffff;
+    --input-bg:    #ffffff;
+    --input-color: #333;
+    --input-border:#ccc;
+    --toggle-bg:   #ccc;
+    --toggle-knob: #ffffff;
+}
+
+/* ── CSS variables — dark ─────────────────────────────────────────────────── */
+.rb-dark {
+    --bg:          #1e1e2e;
+    --bg-alt:      #2a2a3e;
+    --bg-header:   #252535;
+    --border:      #3a3a50;
+    --border-card: #3a3a50;
+    --text:        #e0e0f0;
+    --text-muted:  #a0a0c0;
+    --text-faint:  #7a7a9a;
+    --text-label:  #b0b0d0;
+    --h-border:    #444460;
+    --bar-track:   #3a3a50;
+    --bar-target:  #e0e0f0;
+    --row-source:  #3d2020;
+    --row-dest:    #1e3828;
+    --row-bal:     #1e1e2e;
+    --input-bg:    #2a2a3e;
+    --input-color: #e0e0f0;
+    --input-border:#4a4a65;
+    --toggle-bg:   #5865f2;
+    --toggle-knob: #ffffff;
+}
+
+/* ── Layout ───────────────────────────────────────────────────────────────── */
+#rebalance-wrap  { font-size:13px; color:var(--text); }
+.rb-section      { margin-bottom:20px; }
+.rb-section h3   { margin:0 0 8px; font-size:14px; font-weight:bold;
+                   border-bottom:1px solid var(--h-border); padding-bottom:4px;
+                   color:var(--text); }
+
+/* ── Dark-mode toggle ─────────────────────────────────────────────────────── */
+.rb-toggle-wrap  { display:flex; align-items:center; gap:8px;
+                   font-size:13px; color:var(--text); cursor:pointer;
+                   user-select:none; font-weight:bold; }
+.rb-toggle       { position:relative; width:36px; height:20px; }
+.rb-toggle input { opacity:0; width:0; height:0; position:absolute; }
+.rb-toggle-track { position:absolute; inset:0; border-radius:20px;
+                   background:var(--toggle-bg); transition:background .25s; }
+.rb-toggle-knob  { position:absolute; top:3px; left:3px; width:14px; height:14px;
+                   border-radius:50%; background:var(--toggle-knob);
+                   transition:transform .25s; }
+.rb-toggle input:checked ~ .rb-toggle-track { background:#5865f2; }
+.rb-toggle input:checked ~ .rb-toggle-knob  { transform:translateX(16px); }
+
+/* ── Disk table ───────────────────────────────────────────────────────────── */
+#disk-table      { width:100%; border-collapse:collapse; }
+#disk-table th,
+#disk-table td   { padding:5px 8px; border:1px solid var(--border); white-space:nowrap; }
+#disk-table th   { background:var(--bg-header); text-align:center; color:var(--text); }
+#disk-table td   { text-align:right; color:var(--text); }
+#disk-table td.name { text-align:left; font-weight:bold; }
+#disk-table td.role { text-align:center; }
+.row-source      { background:var(--row-source); }
+.row-dest        { background:var(--row-dest); }
+.row-balanced    { background:var(--row-bal); }
+
+/* ── Usage bar ────────────────────────────────────────────────────────────── */
+.bar-wrap        { position:relative; width:160px; height:16px;
+                   background:var(--bar-track); border-radius:3px; display:inline-block; }
+.bar-fill        { height:100%; border-radius:3px; transition:width .4s; }
+.bar-fill.source      { background:#e74c3c; }
+.bar-fill.destination { background:#2ecc71; }
+.bar-fill.balanced    { background:#3498db; }
+.bar-target      { position:absolute; top:0; width:2px; height:100%;
+                   background:var(--bar-target); opacity:.7; pointer-events:none; }
+.bar-label       { position:absolute; top:0; right:3px; font-size:11px;
+                   line-height:16px; color:var(--text); font-weight:bold; }
+
+/* ── Role badge ───────────────────────────────────────────────────────────── */
+.badge           { display:inline-block; padding:2px 7px; border-radius:10px;
+                   font-size:11px; font-weight:bold; }
+.badge-source    { background:#e74c3c; color:#fff; }
+.badge-dest      { background:#2ecc71; color:#fff; }
+.badge-balanced  { background:#95a5a6; color:#fff; }
+
+/* ── Settings row ─────────────────────────────────────────────────────────── */
+.rb-settings     { display:flex; align-items:center; gap:20px;
+                   flex-wrap:wrap; margin-bottom:12px; }
+.rb-settings label { font-weight:bold; color:var(--text); }
+.rb-settings input[type=number] { width:55px; text-align:center;
+                   background:var(--input-bg); color:var(--input-color);
+                   border:1px solid var(--input-border); border-radius:3px; padding:2px 4px; }
+
+/* ── Buttons ──────────────────────────────────────────────────────────────── */
+.rb-buttons      { display:flex; align-items:center; gap:10px;
+                   margin-bottom:16px; flex-wrap:nowrap; }
+.rb-btn          { padding:7px 18px; border:none; border-radius:4px;
+                   cursor:pointer; font-size:13px; font-weight:bold;
+                   white-space:nowrap; flex-shrink:0; }
+.rb-btn-analyze  { background:#3498db; color:#fff; }
+.rb-btn-start    { background:#27ae60; color:#fff; }
+.rb-btn-stop     { background:#e74c3c; color:#fff; }
+.rb-btn-clear    { background:#95a5a6; color:#fff; }
+.rb-btn:disabled { opacity:.45; cursor:default; }
+.rb-btn:hover:not(:disabled) { filter:brightness(1.1); }
+
+/* ── Inline action progress bar ───────────────────────────────────────────── */
+#action-progress      { display:none; flex:1; align-items:center;
+                        gap:8px; min-width:80px; }
+#ap-bar-wrap          { flex:1; height:20px; background:var(--bar-track);
+                        border-radius:10px; overflow:hidden; }
+#ap-fill              { height:100%; border-radius:10px; width:0%;
+                        transition:width .5s, background .3s; }
+#ap-fill.ap-running   { background:#27ae60; }
+#ap-fill.ap-planning  { background:#3498db; }
+#ap-fill.ap-done      { background:#27ae60; }
+#ap-fill.ap-stopped   { background:#e67e22; }
+#ap-fill.ap-error     { background:#e74c3c; }
+#ap-label             { font-size:12px; color:var(--text-muted);
+                        white-space:nowrap; min-width:38px; text-align:right; }
+
+@keyframes rb-scan {
+    0%   { margin-left:-30%; width:30%; }
+    100% { margin-left:100%; width:30%; }
+}
+#ap-fill.ap-indeterminate {
+    width:30% !important;
+    animation: rb-scan 1.4s ease-in-out infinite;
+    transition: none;
+}
+
+/* ── Status banner ────────────────────────────────────────────────────────── */
+#status-banner   { padding:7px 14px; border-radius:4px; margin-bottom:14px;
+                   font-weight:bold; display:none; }
+.banner-running  { background:#d4efdf; color:#1e8449; border:1px solid #a9dfbf; }
+.banner-planned  { background:#d6eaf8; color:#1a5276; border:1px solid #a9cce3; }
+.banner-done     { background:#d5f5e3; color:#1e8449; border:1px solid #a9dfbf; }
+.banner-stopped  { background:#fef9e7; color:#9a7d0a; border:1px solid #f9e79f; }
+.banner-error    { background:#fadbd8; color:#922b21; border:1px solid #f5b7b1; }
+.rb-dark .banner-running  { background:#1a3d28; color:#4ecca3; border-color:#2a6048; }
+.rb-dark .banner-planned  { background:#1a2a3d; color:#6ab0f5; border-color:#2a4060; }
+.rb-dark .banner-done     { background:#1a3d28; color:#4ecca3; border-color:#2a6048; }
+.rb-dark .banner-stopped  { background:#3d3010; color:#f0c040; border-color:#605020; }
+.rb-dark .banner-error    { background:#3d1a1a; color:#f07070; border-color:#602a2a; }
+
+/* ── Stats panel ──────────────────────────────────────────────────────────── */
+#stats-panel     { display:none; }
+.stats-grid      { display:grid;
+                   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+                   gap:10px; margin-bottom:12px; }
+.stat-card       { background:var(--bg-alt); border:1px solid var(--border-card);
+                   border-radius:6px; padding:10px 14px; }
+.stat-label      { font-size:11px; color:var(--text-muted); text-transform:uppercase;
+                   letter-spacing:.5px; }
+.stat-value      { font-size:20px; font-weight:bold; color:var(--text); margin-top:2px; }
+.stat-sub        { font-size:11px; color:var(--text-faint); }
+
+/* ── Overall progress bar ─────────────────────────────────────────────────── */
+#overall-bar-wrap { margin-bottom:14px; }
+#overall-bar     { width:100%; height:22px; border-radius:4px;
+                   background:var(--bar-track); overflow:hidden; }
+#overall-fill    { height:100%; background:#27ae60; transition:width .5s;
+                   border-radius:4px; }
+#overall-label   { text-align:center; font-size:12px; color:var(--text-label); margin-top:3px; }
+
+/* ── Plan table ───────────────────────────────────────────────────────────── */
+#plan-section    { display:none; }
+#plan-table      { width:100%; border-collapse:collapse; font-size:12px; }
+#plan-table th,
+#plan-table td   { padding:4px 7px; border:1px solid var(--border); color:var(--text); }
+#plan-table th   { background:var(--bg-header); white-space:nowrap; }
+.ps-pending  { color:var(--text-faint); }
+.ps-moving   { color:#2980b9; font-weight:bold; }
+.ps-done     { color:#27ae60; }
+.ps-skipped  { color:#e67e22; }
+.ps-error    { color:#e74c3c; font-weight:bold; }
+
+/* ── Log panel ────────────────────────────────────────────────────────────── */
+#log-section     { display:none; }
+#log-box         { background:#1a1a2e; color:#a0e0a0; font-family:monospace;
+                   font-size:12px; padding:10px; height:220px; overflow-y:auto;
+                   border-radius:4px; white-space:pre-wrap; word-break:break-all; }
+</style>
+</head>
+<body>
+<div id="rebalance-wrap">
+
+<!-- ── Status banner ─────────────────────────────────────────────────────── -->
+<div id="status-banner"></div>
+
+<!-- ── Disk Overview ─────────────────────────────────────────────────────── -->
+<div class="rb-section">
+  <h3><i class="fa fa-hdd-o"></i> Array Disk Usage</h3>
+  <table id="disk-table">
+    <thead>
+      <tr>
+        <th>Disk</th>
+        <th>Capacity</th>
+        <th>Used</th>
+        <th>Free</th>
+        <th style="min-width:200px">Usage vs Target</th>
+        <th>Current&nbsp;%</th>
+        <th>Target&nbsp;%</th>
+        <th>Delta</th>
+        <th>Role</th>
+      </tr>
+    </thead>
+    <tbody id="disk-tbody">
+      <tr><td colspan="9" style="text-align:center;color:#888">
+        <i class="fa fa-spinner fa-spin"></i> Loading disk information…
+      </td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- ── Settings ──────────────────────────────────────────────────────────── -->
+<div class="rb-section">
+  <h3><i class="fa fa-sliders"></i> Settings</h3>
+  <div class="rb-settings">
+    <div>
+      <label for="tolerance">Tolerance: </label>
+      <input type="number" id="tolerance" value="2" min="1" max="20">
+      <span>%</span>
+      <span style="color:#888;font-size:12px;margin-left:6px">
+        (disks within ±N% of target are considered balanced)
+      </span>
+    </div>
+    <div>
+      <label>
+        <input type="checkbox" id="use-cache" onchange="toggleCacheOpts()">
+        Use SSD Cache as staging buffer
+        <span style="color:#888;font-size:12px">(~1.5× faster — pipelines reads &amp; writes)</span>
+      </label>
+    </div>
+    <div id="cache-opts" style="display:none;margin-left:22px;margin-top:6px">
+      <div style="margin-bottom:6px">
+        <label for="cache-buffer-gb">Staging budget: </label>
+        <input type="number" id="cache-buffer-gb" value="100" min="10" max="2000" style="width:65px">
+        <span>GB</span>
+        <span style="color:#888;font-size:12px;margin-left:6px">
+          (max cache space used for temporary staging files)
+        </span>
+      </div>
+      <div>
+        <label for="stage-pool">Cache pool: </label>
+        <select id="stage-pool" style="background:var(--input-bg);color:var(--input-color);
+                border:1px solid var(--input-border);border-radius:3px;padding:2px 4px;
+                font-size:13px" onchange="updateStagePath()"></select>
+        <span style="color:#888;font-size:12px;margin-left:6px" id="stage-pool-free"></span>
+      </div>
+    </div>
+  </div>
+  <div class="rb-settings" style="margin-bottom:0">
+    <label class="rb-toggle-wrap" title="Toggle dark mode">
+      <span class="rb-toggle">
+        <input type="checkbox" id="dark-toggle" onchange="toggleDark()">
+        <span class="rb-toggle-track"></span>
+        <span class="rb-toggle-knob"></span>
+      </span>
+      <span>Dark Mode</span>
+    </label>
+    <div>
+      <label for="min-file-mb">Min file size: </label>
+      <input type="number" id="min-file-mb" value="0" min="0" max="100000"
+             style="width:65px;background:var(--input-bg);color:var(--input-color);
+                    border:1px solid var(--input-border);border-radius:3px;padding:2px 4px;
+                    text-align:center">
+      <span>MB</span>
+      <span style="color:#888;font-size:12px;margin-left:6px">(skip files smaller than this — 0 = no filter)</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Action buttons ────────────────────────────────────────────────────── -->
+<div class="rb-buttons">
+  <button class="rb-btn rb-btn-analyze" id="btn-analyze"
+          onclick="startRebalance(true)">
+    <i class="fa fa-search"></i> Start Analysis
+  </button>
+  <button class="rb-btn rb-btn-start" id="btn-start"
+          onclick="startRebalance(false)">
+    <i class="fa fa-play"></i> Start Rebalance
+  </button>
+  <button class="rb-btn rb-btn-stop" id="btn-stop"
+          onclick="stopRebalance()" disabled>
+    <i class="fa fa-stop"></i> Stop
+  </button>
+  <button class="rb-btn rb-btn-clear" id="btn-clear"
+          onclick="clearResults()" style="display:none">
+    <i class="fa fa-trash"></i> Clear Results
+  </button>
+  <div id="action-progress">
+    <div id="ap-bar-wrap"><div id="ap-fill"></div></div>
+    <span id="ap-label"></span>
+  </div>
+</div>
+
+<!-- ── Statistics panel ───────────────────────────────────────────────────── -->
+<div class="rb-section" id="stats-panel">
+  <h3><i class="fa fa-bar-chart"></i> Statistics</h3>
+  <div id="overall-bar-wrap">
+    <div id="overall-bar"><div id="overall-fill" style="width:0%"></div></div>
+    <div id="overall-label">0%</div>
+  </div>
+  <div class="stats-grid">
+    <div class="stat-card">
+      <div class="stat-label">Files Moved</div>
+      <div class="stat-value" id="st-files-done">0</div>
+      <div class="stat-sub" id="st-files-sub">of 0 planned</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Data Moved</div>
+      <div class="stat-value" id="st-bytes-done">0</div>
+      <div class="stat-sub" id="st-bytes-sub">of 0 total</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Transfer Rate</div>
+      <div class="stat-value" id="st-rate">—</div>
+      <div class="stat-sub">MB/s</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Elapsed</div>
+      <div class="stat-value" id="st-elapsed">00:00:00</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Est. Time Remaining</div>
+      <div class="stat-value" id="st-eta">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Skipped / Errors</div>
+      <div class="stat-value" id="st-skipped">0</div>
+    </div>
+    <div class="stat-card" id="st-cache-card" style="display:none">
+      <div class="stat-label">Cache Staged</div>
+      <div class="stat-value" id="st-cache-staged">0</div>
+      <div class="stat-sub" id="st-cache-sub">of 0 budget</div>
+    </div>
+  </div>
+  <div style="font-size:12px;color:#666" id="st-current"></div>
+</div>
+
+<!-- ── Move plan table ────────────────────────────────────────────────────── -->
+<div class="rb-section" id="plan-section">
+  <h3>
+    <i class="fa fa-list"></i> Move Plan
+    <span id="plan-count-label" style="font-size:12px;font-weight:normal;color:#666"></span>
+  </h3>
+  <div style="max-height:350px;overflow-y:auto">
+    <table id="plan-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>File</th>
+          <th>Size</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="plan-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Log ───────────────────────────────────────────────────────────────── -->
+<div class="rb-section" id="log-section">
+  <h3><i class="fa fa-terminal"></i> Log</h3>
+  <div id="log-box"></div>
+</div>
+
+</div><!-- #rebalance-wrap -->
+
+<script>
+(function(){
+'use strict';
+
+var ENDPOINT     = '/plugins/rebalance/scripts/status.php';
+var CSRF_TOKEN   = '<?= htmlspecialchars($csrf, ENT_QUOTES) ?>';
+var poller       = null;
+var lastLogCount = 0;
+var cachePools   = [];   // populated from first GET response
+
+// ── Formatting helpers ────────────────────────────────────────────────────
+function fmtKB(kb) {
+    if (!kb) return '0 KB';
+    if (kb >= 1073741824) return (kb/1073741824).toFixed(1)+' TB';
+    if (kb >= 1048576)    return (kb/1048576).toFixed(1)+' GB';
+    if (kb >= 1024)       return (kb/1024).toFixed(1)+' MB';
+    return kb+' KB';
+}
+
+function fmtSec(s) {
+    if (!s || s <= 0) return '—';
+    var h = Math.floor(s/3600),
+        m = Math.floor((s%3600)/60),
+        ss = s%60;
+    return pad(h)+':'+pad(m)+':'+pad(ss);
+}
+
+function pad(n){ return n<10?'0'+n:n; }
+
+function fmtRate(kbs) {
+    if (!kbs || kbs <= 0) return '—';
+    if (kbs >= 1048576) return (kbs/1048576).toFixed(1)+' GB/s';
+    if (kbs >= 1024)    return (kbs/1024).toFixed(1)+' MB/s';
+    return kbs+' KB/s';
+}
+
+// ── Disk table ────────────────────────────────────────────────────────────
+function renderDisks(disks, targetPct, tolerance) {
+    var tb  = document.getElementById('disk-tbody');
+    if (!disks || !disks.length) {
+        tb.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888">No data disks found.</td></tr>';
+        return;
+    }
+    var rows = '';
+    disks.forEach(function(d){
+        var delta     = d.pct - targetPct;
+        var deltaStr  = (delta > 0 ? '+' : '') + delta + '%';
+        var rowClass  = d.role === 'source' ? 'row-source' :
+                        d.role === 'destination' ? 'row-dest' : 'row-balanced';
+        var barW      = Math.min(100, d.pct);
+        var targetW   = Math.min(100, targetPct);
+        var badgeClass= d.role === 'source'      ? 'badge-source' :
+                        d.role === 'destination' ? 'badge-dest'   : 'badge-balanced';
+        var roleLabel = d.role === 'source'      ? 'Source' :
+                        d.role === 'destination' ? 'Destination'  : 'Balanced';
+
+        rows += '<tr class="'+rowClass+'">'
+            + '<td class="name">'+d.name+'</td>'
+            + '<td>'+fmtKB(d.size_kb)+'</td>'
+            + '<td>'+fmtKB(d.used_kb)+'</td>'
+            + '<td>'+fmtKB(d.free_kb)+'</td>'
+            + '<td style="text-align:left">'
+            +   '<div class="bar-wrap">'
+            +     '<div class="bar-fill '+d.role+'" style="width:'+barW+'%"></div>'
+            +     '<div class="bar-target" style="left:'+targetW+'%"></div>'
+            +     '<span class="bar-label">'+d.pct+'%</span>'
+            +   '</div>'
+            + '</td>'
+            + '<td style="color:'+(d.pct > targetPct+tolerance ? '#e74c3c' : d.pct < targetPct-tolerance ? '#27ae60' : '#333')+'"><b>'+d.pct+'%</b></td>'
+            + '<td>'+targetPct+'%</td>'
+            + '<td style="color:'+(delta>0?'#e74c3c':delta<0?'#27ae60':'#333')+'">'+deltaStr+'</td>'
+            + '<td class="role"><span class="badge '+badgeClass+'">'+roleLabel+'</span></td>'
+            + '</tr>';
+    });
+    tb.innerHTML = rows;
+}
+
+// ── Statistics panel ──────────────────────────────────────────────────────
+function renderStats(data) {
+    var s = data.stats || {};
+    var panel = document.getElementById('stats-panel');
+
+    if (data.state === 'idle') { panel.style.display='none'; return; }
+    panel.style.display = '';
+
+    var pct = s.pct_done || 0;
+    document.getElementById('overall-fill').style.width = pct+'%';
+    document.getElementById('overall-label').textContent =
+        pct+'% — '+fmtKB(s.bytes_done_kb||0)+' of '+fmtKB(s.bytes_total_kb||0)+' moved';
+
+    document.getElementById('st-files-done').textContent = s.files_done||0;
+    document.getElementById('st-files-sub').textContent  = 'of '+(s.files_total||0)+' planned';
+    document.getElementById('st-bytes-done').textContent = fmtKB(s.bytes_done_kb||0);
+    document.getElementById('st-bytes-sub').textContent  = 'of '+fmtKB(s.bytes_total_kb||0);
+    document.getElementById('st-rate').textContent       = fmtRate(s.rate_kbs||0);
+    document.getElementById('st-elapsed').textContent    = fmtSec(data.elapsed_sec||0);
+    document.getElementById('st-eta').textContent        = data.state==='running' ? fmtSec(s.eta_sec||0) : '—';
+    document.getElementById('st-skipped').textContent    = s.files_skipped||0;
+
+    // Cache staging card (only shown when use_cache is active)
+    var cacheCard = document.getElementById('st-cache-card');
+    if (data.use_cache && data.state !== 'idle') {
+        cacheCard.style.display = '';
+        document.getElementById('st-cache-staged').textContent = fmtKB(data.cache_staged_kb||0);
+        document.getElementById('st-cache-sub').textContent =
+            'of '+ fmtKB(data.cache_buffer_kb||0) +' budget';
+    } else {
+        cacheCard.style.display = 'none';
+    }
+
+    var cur = data.current_file||'';
+    document.getElementById('st-current').textContent =
+        cur ? 'Currently moving: '+cur : '';
+}
+
+// ── Plan table ────────────────────────────────────────────────────────────
+function renderPlan(plan, planCount) {
+    var section = document.getElementById('plan-section');
+    if (!plan || !plan.length) { section.style.display='none'; return; }
+    section.style.display = '';
+
+    var shown = plan.length;
+    var label = document.getElementById('plan-count-label');
+    label.textContent = shown < planCount
+        ? '(showing first '+shown+' of '+planCount+' moves)'
+        : '('+planCount+' moves total)';
+
+    var rows = '';
+    plan.forEach(function(p, idx){
+        var src   = p.src||'';
+        var dst   = p.dst||'';
+        var fname = src.split('/').pop();
+        var from  = src.replace(/^\/mnt\//, '').split('/')[0];
+        var to    = dst.replace(/^\/mnt\//, '').split('/')[0];
+        var sc    = 'ps-'+p.s;
+        rows += '<tr class="'+sc+'">'
+            + '<td style="color:#999">'+(idx+1)+'</td>'
+            + '<td title="'+escHtml(src)+'">'+escHtml(fname)+'</td>'
+            + '<td>'+fmtKB(p.kb)+'</td>'
+            + '<td>'+escHtml(from)+'</td>'
+            + '<td>'+escHtml(to)+'</td>'
+            + '<td class="'+sc+'">'+escHtml(p.s)+'</td>'
+            + '</tr>';
+    });
+    document.getElementById('plan-tbody').innerHTML = rows;
+}
+
+// ── Log ───────────────────────────────────────────────────────────────────
+function renderLog(log) {
+    if (!log || !log.length) return;
+    var box  = document.getElementById('log-box');
+    var section = document.getElementById('log-section');
+    section.style.display = '';
+
+    if (log.length !== lastLogCount) {
+        lastLogCount = log.length;
+        var text = log.map(function(e){ return '['+e.t+'] '+e.m; }).join('\n');
+        box.textContent = text;
+        box.scrollTop   = box.scrollHeight;
+    }
+}
+
+// ── Banner ────────────────────────────────────────────────────────────────
+function showBanner(state, dryRun, stats) {
+    var banner  = document.getElementById('status-banner');
+    var msgs    = {
+        running : '&#9654; Rebalance in progress… please do not shut down the array.',
+        planning: '&#128269; Analysing disk usage and building move plan…',
+        planned : '&#9432; Dry-run complete — no files were moved. Review the plan below.',
+        completed: '&#10003; Rebalance complete! '+
+                   (stats ? stats.files_done+' files moved, '+
+                   (stats.files_skipped||0)+' skipped.' : ''),
+        stopped : '&#9632; Rebalance was stopped by the user.',
+        error   : '&#9888; An error occurred — check the log for details.',
+        idle    : null,
+        starting: '&#128269; Starting…',
+    };
+
+    var cls  = {
+        running:'banner-running', planning:'banner-running',
+        planned:'banner-planned', completed:'banner-done',
+        stopped:'banner-stopped', error:'banner-error',
+        starting:'banner-running',
+    };
+
+    if (!msgs[state]) { banner.style.display='none'; return; }
+    banner.style.display = '';
+    banner.className     = 'banner-'+(cls[state]||'running');  // reset
+    banner.className    += ' '+(cls[state]||'banner-running');
+    banner.innerHTML     = msgs[state];
+}
+
+// ── Button state ──────────────────────────────────────────────────────────
+function setButtons(state) {
+    var running  = (state==='running'||state==='planning'||state==='starting');
+    var finished = (state==='completed'||state==='stopped'||state==='planned'||state==='error');
+
+    document.getElementById('btn-analyze').disabled = running;
+    document.getElementById('btn-start').disabled   = running;
+    document.getElementById('btn-stop').disabled    = !running;
+    document.getElementById('btn-clear').style.display = finished ? '' : 'none';
+}
+
+// ── Cache pool dropdown ───────────────────────────────────────────────────
+window.updateStagePath = function() {
+    var sel  = document.getElementById('stage-pool');
+    var info = document.getElementById('stage-pool-free');
+    var idx  = sel.selectedIndex;
+    if (idx >= 0 && cachePools[idx]) {
+        var p = cachePools[idx];
+        info.textContent = fmtKB(p.free_kb) + ' free of ' + fmtKB(p.size_kb);
+    } else {
+        info.textContent = '';
+    }
+};
+
+function populateCachePools(pools) {
+    if (!pools || !pools.length) return;
+    // Only repopulate if the list changed
+    if (JSON.stringify(pools) === JSON.stringify(cachePools)) return;
+    cachePools = pools;
+    var sel = document.getElementById('stage-pool');
+    var prev = sel.value;
+    sel.innerHTML = '';
+    pools.forEach(function(p) {
+        var opt = document.createElement('option');
+        opt.value = p.path + '/.rebalance_stage';
+        opt.textContent = p.name + '  (/mnt/' + p.name + ')';
+        sel.appendChild(opt);
+    });
+    if (prev) sel.value = prev;
+    updateStagePath();
+}
+
+// ── Inline action progress bar ────────────────────────────────────────────
+function updateActionProgress(state, stats, data) {
+    data = data || {};
+    var wrap  = document.getElementById('action-progress');
+    var fill  = document.getElementById('ap-fill');
+    var label = document.getElementById('ap-label');
+
+    // States where we hide the bar entirely
+    if (state === 'idle') {
+        wrap.style.display = 'none';
+        return;
+    }
+
+    wrap.style.display = 'flex';
+    fill.className = '';   // reset classes
+
+    if (state === 'starting' || state === 'planning') {
+        var pdIdx   = data.planning_disk_index || 0;
+        var pdCount = data.planning_disk_count || 0;
+        var planned   = (stats && stats.files_total)    ? stats.files_total    : 0;
+        var plannedKB = (stats && stats.bytes_total_kb) ? stats.bytes_total_kb : 0;
+
+        if (state === 'planning' && pdCount > 0 && pdIdx > 0) {
+            // Deterministic bar: advances one step per source disk scanned
+            var diskPct = Math.round((pdIdx - 1) / pdCount * 100);
+            fill.classList.add('ap-planning');
+            fill.style.width = diskPct + '%';
+            var etaStr = '';
+            if (pdIdx > 1 && data.elapsed_sec > 0) {
+                var secPerDisk = data.elapsed_sec / (pdIdx - 1);
+                var remainSec  = (pdCount - pdIdx + 1) * secPerDisk;
+                etaStr = '  (~' + fmtSec(remainSec) + ' left)';
+            }
+            label.textContent = 'Disk ' + pdIdx + ' of ' + pdCount
+                + '  \u2014  ' + planned.toLocaleString()
+                + ' files / ' + fmtKB(plannedKB) + ' planned' + etaStr + '\u2026';
+        } else {
+            fill.classList.add('ap-planning', 'ap-indeterminate');
+            if (state === 'planning' && planned > 0) {
+                label.textContent = planned + ' files / ' + fmtKB(plannedKB) + ' planned\u2026';
+            } else {
+                label.textContent = state === 'planning' ? 'Scanning\u2026' : 'Starting\u2026';
+            }
+        }
+
+    } else if (state === 'running') {
+        var pct = (stats && stats.pct_done) ? stats.pct_done : 0;
+        fill.classList.add('ap-running');
+        fill.style.width = pct + '%';
+        label.textContent = pct + '%';
+
+    } else if (state === 'completed') {
+        fill.classList.add('ap-done');
+        fill.style.width = '100%';
+        label.textContent = '100%';
+
+    } else if (state === 'planned') {
+        fill.classList.add('ap-done');
+        fill.style.width = '100%';
+        label.textContent = 'Ready';
+
+    } else if (state === 'stopped') {
+        var pct = (stats && stats.pct_done) ? stats.pct_done : 0;
+        fill.classList.add('ap-stopped');
+        fill.style.width = pct + '%';
+        label.textContent = pct + '%';
+
+    } else if (state === 'error') {
+        fill.classList.add('ap-error');
+        fill.style.width = '100%';
+        label.textContent = 'Error';
+    }
+}
+
+// ── Main update ───────────────────────────────────────────────────────────
+function applyStatus(data) {
+    var tol = parseInt(document.getElementById('tolerance').value)||2;
+    renderDisks(data.disks, data.target_pct, data.tolerance||tol);
+    renderStats(data);
+    renderPlan(data.plan, data.plan_count||0);
+    renderLog(data.log);
+    showBanner(data.state, data.dry_run, data.stats);
+    setButtons(data.state);
+    updateActionProgress(data.state, data.stats, data);
+    if (data.cache_pools) populateCachePools(data.cache_pools);
+}
+
+// ── Polling ───────────────────────────────────────────────────────────────
+function startPolling() {
+    if (poller) return;
+    poller = setInterval(poll, 2000);
+}
+
+function stopPolling() {
+    if (poller) { clearInterval(poller); poller=null; }
+}
+
+function poll() {
+    var tol = parseInt(document.getElementById('tolerance').value)||2;
+    fetch(ENDPOINT+'?tolerance='+tol)
+        .then(function(r){ return r.json(); })
+        .then(function(data){
+            applyStatus(data);
+            var active = (data.state==='running'||data.state==='planning'||data.state==='starting');
+            if (!active) stopPolling();
+        })
+        .catch(function(e){ console.warn('ReBalance poll error:', e); });
+}
+
+// ── Actions ───────────────────────────────────────────────────────────────
+window.startRebalance = function(dryRun) {
+    var tol       = parseInt(document.getElementById('tolerance').value)||2;
+    var useCache  = document.getElementById('use-cache').checked;
+    var bufGB     = parseInt(document.getElementById('cache-buffer-gb').value)||100;
+    var stageDir   = document.getElementById('stage-pool')
+                       ? document.getElementById('stage-pool').value : '';
+    var minFileMB  = parseInt(document.getElementById('min-file-mb').value) || 0;
+    var body = new URLSearchParams();
+    body.set('csrf_token', CSRF_TOKEN);
+    body.set('action', 'start');
+    body.set('tolerance', tol);
+    if (minFileMB > 0) body.set('min_file_kb', minFileMB * 1024);
+    if (dryRun) body.set('dry_run', '1');
+    if (useCache) {
+        body.set('use_cache', '1');
+        body.set('cache_buffer_kb', bufGB * 1024);
+        if (stageDir) body.set('stage_dir', stageDir);
+    }
+
+    setButtons('starting');
+    showBanner('starting');
+    lastLogCount = 0;
+    document.getElementById('log-box').textContent = '';
+
+    fetch(ENDPOINT, {method:'POST', body:body})
+        .then(function(r){
+            return r.text().then(function(txt){
+                try { return JSON.parse(txt); }
+                catch(e) { throw new Error('Server returned (HTTP '+r.status+'): '+txt.substring(0,300)); }
+            });
+        })
+        .then(function(resp){
+            if (resp.success) { startPolling(); poll(); }
+            else alert('Could not start: '+resp.msg);
+        })
+        .catch(function(e){ alert('Request failed: '+e); setButtons('idle'); });
+};
+
+window.stopRebalance = function() {
+    if (!confirm('Stop the rebalance? Files currently being moved will complete safely.')) return;
+    var body = new URLSearchParams();
+    body.set('csrf_token', CSRF_TOKEN);
+    body.set('action','stop');
+    fetch(ENDPOINT, {method:'POST', body:body})
+        .then(function(){ setTimeout(poll, 1500); });
+};
+
+window.clearResults = function() {
+    var body = new URLSearchParams();
+    var tol  = parseInt(document.getElementById('tolerance').value)||2;
+    body.set('csrf_token', CSRF_TOKEN);
+    body.set('action','clear');
+    body.set('tolerance', tol);
+    document.getElementById('plan-tbody').innerHTML = '';
+    document.getElementById('plan-section').style.display  = 'none';
+    document.getElementById('log-section').style.display   = 'none';
+    document.getElementById('stats-panel').style.display   = 'none';
+    document.getElementById('action-progress').style.display = 'none';
+    lastLogCount = 0;
+    fetch(ENDPOINT, {method:'POST', body:body})
+        .then(function(r){ return r.json(); })
+        .then(applyStatus);
+};
+
+// Toggle cache buffer size input visibility
+window.toggleCacheOpts = function() {
+    var on = document.getElementById('use-cache').checked;
+    document.getElementById('cache-opts').style.display = on ? '' : 'none';
+};
+
+// ── Dark mode ─────────────────────────────────────────────────────────────
+window.toggleDark = function() {
+    var dark = document.getElementById('dark-toggle').checked;
+    document.getElementById('rebalance-wrap').classList.toggle('rb-dark', dark);
+    try { localStorage.setItem('rb-dark', dark ? '1' : '0'); } catch(e){}
+};
+
+// Restore saved preference on load
+(function(){
+    var saved = '';
+    try { saved = localStorage.getItem('rb-dark'); } catch(e){}
+    if (saved === '1') {
+        document.getElementById('dark-toggle').checked = true;
+        document.getElementById('rebalance-wrap').classList.add('rb-dark');
+    }
+})();
+
+// Refresh disk table when tolerance changes
+document.getElementById('tolerance').addEventListener('change', poll);
+
+// ── Initial load ──────────────────────────────────────────────────────────
+poll();
+
+// If a run is in progress (e.g. page reload mid-run), start polling
+fetch(ENDPOINT)
+    .then(function(r){ return r.json(); })
+    .then(function(data){
+        var active = (data.state==='running'||data.state==='planning'||data.state==='starting');
+        if (active) startPolling();
+    });
+
+function escHtml(s){
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+# Build output
+rebalance.tar.gz
+
+# Generated at build time from the SVG
+plugin/images/rebalance.png
+
+# Development screenshots
+Screenshot*.png

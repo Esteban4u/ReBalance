@@ -1,0 +1,95 @@
+<?xml version='1.0' standalone='yes'?>
+<!DOCTYPE PLUGIN [
+  <!ENTITY name       "rebalance">
+  <!ENTITY author     "SteveLocal">
+  <!ENTITY version    "2026.04.16">
+  <!ENTITY pluginURL  "file:///boot/config/plugins/rebalance/rebalance.plg">
+  <!ENTITY pluginDir  "/usr/local/emhttp/plugins/rebalance">
+]>
+
+<!--
+  ReBalance — Unraid Array Disk Usage Balancer
+  Moves files between data disks to equalise usage percentage across
+  mixed-capacity drives (e.g. 4 TB and 2 TB drives in the same array).
+
+  Installation:
+    1. Copy rebalance.plg  →  /boot/config/plugins/rebalance/rebalance.plg
+    2. Copy rebalance.tar.gz →  /boot/config/plugins/rebalance/rebalance.tar.gz
+    3. In the Unraid web UI go to Plugins → Install Plugin
+    4. Browse to (or type): /boot/config/plugins/rebalance/rebalance.plg
+    5. Click Install
+    6. The plugin appears under Tools → ReBalance
+-->
+
+<PLUGIN
+  name="&name;"
+  author="&author;"
+  version="&version;"
+  pluginURL="&pluginURL;"
+  icon="/plugins/rebalance/images/rebalance.svg"
+  support="https://forums.unraid.net"
+>
+
+<CHANGES>
+##2026.04.16
+- Initial release
+- Rebalances array disk usage by moving files from over-used to under-used disks
+- Equalises percentage usage across mixed-capacity drives (different sizes, same target %)
+- Largest-first file ordering for efficient balancing
+- Dry-run / Analyse mode — preview moves before executing
+- Optional SSD cache staging pipeline (~1.5× faster)
+- Live statistics: transfer rate, elapsed time, estimated time remaining
+- Configurable tolerance (default ±2%)
+- Stop/resume support
+</CHANGES>
+
+<!-- ── Step 1: copy tarball from boot drive (already placed there by user) ── -->
+<FILE Name="/boot/config/plugins/rebalance/rebalance.tar.gz">
+  <URL>/boot/config/plugins/rebalance/rebalance.tar.gz</URL>
+</FILE>
+
+<!-- ── Step 2: unpack and configure ───────────────────────────────────────── -->
+<FILE Run="/bin/bash">
+<INLINE>
+# Remove any previous install
+rm -rf &pluginDir;
+
+# Unpack plugin files into /usr/local/emhttp/plugins/
+mkdir -p &pluginDir;
+tar -xzf /boot/config/plugins/rebalance/rebalance.tar.gz \
+    -C /usr/local/emhttp/plugins/ \
+    --no-same-owner 2>/dev/null
+
+# Make scripts executable
+chmod +x &pluginDir;/scripts/rebalance.sh
+chmod 644 &pluginDir;/scripts/status.php
+
+echo ""
+echo "-----------------------------------------------------------"
+echo " ReBalance plugin installed successfully."
+echo " Access it under:  Tools → ReBalance"
+echo "-----------------------------------------------------------"
+echo ""
+</INLINE>
+</FILE>
+
+<!-- ── Uninstall handler ────────────────────────────────────────────────────── -->
+<FILE Run="/bin/bash" Method="remove">
+<INLINE>
+# Kill any running rebalance process
+if [[ -f /tmp/rebalance.lock ]]; then
+    kill "$(cat /tmp/rebalance.lock)" 2>/dev/null
+    rm -f /tmp/rebalance.lock
+fi
+
+# Clean up staging dir if present
+rm -rf /mnt/cache/.rebalance_stage 2>/dev/null
+
+# Remove plugin files
+rm -rf &pluginDir;
+
+echo "ReBalance plugin removed."
+</INLINE>
+</FILE>
+
+</PLUGIN>

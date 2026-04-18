@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Background circle -->
+  <circle cx="32" cy="32" r="32" fill="#1a1a2e"/>
+  <!-- Pivot post -->
+  <rect x="30.5" y="14" width="3" height="34" rx="1.5" fill="#e07b39"/>
+  <!-- Base -->
+  <rect x="20" y="48" width="24" height="3.5" rx="1.75" fill="#e07b39"/>
+  <!-- Beam -->
+  <rect x="12" y="21" width="40" height="3" rx="1.5" fill="#e8e8e8"/>
+  <!-- Left chain -->
+  <line x1="15" y1="24" x2="15" y2="33" stroke="#aaa" stroke-width="1.5" stroke-dasharray="2,1.5"/>
+  <!-- Right chain -->
+  <line x1="49" y1="24" x2="49" y2="33" stroke="#aaa" stroke-width="1.5" stroke-dasharray="2,1.5"/>
+  <!-- Left pan -->
+  <ellipse cx="15" cy="36" rx="8" ry="3" fill="none" stroke="#e8e8e8" stroke-width="1.8"/>
+  <path d="M7 36 Q15 41 23 36" fill="#3a3a5c" stroke="#e8e8e8" stroke-width="1.5"/>
+  <!-- Right pan -->
+  <ellipse cx="49" cy="36" rx="8" ry="3" fill="none" stroke="#e8e8e8" stroke-width="1.8"/>
+  <path d="M41 36 Q49 41 57 36" fill="#3a3a5c" stroke="#e8e8e8" stroke-width="1.5"/>
+  <!-- Pivot diamond -->
+  <polygon points="32,12 35,17 32,22 29,17" fill="#e07b39"/>
+  <!-- Percent signs on pans to suggest usage % -->
+  <text x="11" y="38.5" font-family="monospace" font-size="7" fill="#e8e8e8" font-weight="bold">%</text>
+  <text x="45" y="38.5" font-family="monospace" font-size="7" fill="#e8e8e8" font-weight="bold">%</text>
+</svg>
