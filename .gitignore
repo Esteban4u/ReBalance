@@ -4,5 +4,8 @@ rebalance.tar.gz
 # Generated at build time from the SVG
 plugin/images/rebalance.png
 
-# Development screenshots
+# Development screenshots (root level only)
 Screenshot*.png
+
+# Allow docs folder screenshots
+!docs/*.png

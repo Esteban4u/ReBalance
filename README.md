@@ -6,9 +6,9 @@ If you have a mix of 4 TB and 2 TB drives in the same array, Unraid's default fi
 
 ---
 
-## Screenshots
+## Screenshot
 
-![ReBalance UI](https://raw.githubusercontent.com/Esteban4u/ReBalance/main/plugin/images/rebalance.svg)
+![ReBalance UI](https://raw.githubusercontent.com/Esteban4u/ReBalance/main/docs/screenshot.png)
 
 ---
 
