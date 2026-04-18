@@ -1,8 +1,8 @@
 <?xml version='1.0' standalone='yes'?>
 <!DOCTYPE PLUGIN [
   <!ENTITY name       "rebalance">
-  <!ENTITY author     "SteveLocal">
-  <!ENTITY version    "2026.04.16">
+  <!ENTITY author     "Esteban4u">
+  <!ENTITY version    "2026.04.18">
   <!ENTITY pluginURL  "https://raw.githubusercontent.com/Esteban4u/ReBalance/main/rebalance.plg">
   <!ENTITY pluginDir  "/usr/local/emhttp/plugins/rebalance">
 ]>
@@ -13,12 +13,11 @@
   mixed-capacity drives (e.g. 4 TB and 2 TB drives in the same array).
 
   Installation:
-    1. Copy rebalance.plg  →  /boot/config/plugins/rebalance/rebalance.plg
-    2. Copy rebalance.tar.gz →  /boot/config/plugins/rebalance/rebalance.tar.gz
-    3. In the Unraid web UI go to Plugins → Install Plugin
-    4. Browse to (or type): /boot/config/plugins/rebalance/rebalance.plg
-    5. Click Install
-    6. The plugin appears under Tools → ReBalance
+    In the Unraid web UI go to Plugins → Install Plugin and paste:
+    https://raw.githubusercontent.com/Esteban4u/ReBalance/main/rebalance.plg
+
+  Support:
+    https://forums.unraid.net/topic/198334-rebalance-array-disk-usage-balancer/
 -->
 
 <PLUGIN
@@ -26,26 +25,34 @@
   author="&author;"
   version="&version;"
   pluginURL="&pluginURL;"
+  min="6.12"
   icon="/plugins/rebalance/images/rebalance.svg"
   support="https://forums.unraid.net/topic/198334-rebalance-array-disk-usage-balancer/"
 >
 
 <CHANGES>
+##2026.04.18
+- Analysis mode (Start Analysis button) — build and review move plan with no files moved
+- Deterministic planning progress bar showing disk X of Y with ETA
+- Minimum file size filter — skip small files, focus moves on content
+- Fixed min file size filter not being applied to find command
+- Removed Dry Run checkbox (Start Analysis always performs a dry run)
+- Tools menu icon updated to scales graphic
+
 ##2026.04.16
 - Initial release
 - Rebalances array disk usage by moving files from over-used to under-used disks
 - Equalises percentage usage across mixed-capacity drives (different sizes, same target %)
-- Largest-first file ordering for efficient balancing
-- Dry-run / Analyse mode — preview moves before executing
 - Optional SSD cache staging pipeline (~1.5× faster)
 - Live statistics: transfer rate, elapsed time, estimated time remaining
 - Configurable tolerance (default ±2%)
-- Stop/resume support
+- Stop support
 </CHANGES>
 
-<!-- ── Step 1: copy tarball from boot drive (already placed there by user) ── -->
+<!-- ── Step 1: download tarball from GitHub release ────────────────────────── -->
 <FILE Name="/boot/config/plugins/rebalance/rebalance.tar.gz">
   <URL>https://github.com/Esteban4u/ReBalance/releases/download/2026.04.18/rebalance.tar.gz</URL>
+  <MD5>7ce844db96cea8aaf5f8cc68ae2a7a67</MD5>
 </FILE>
 
 <!-- ── Step 2: unpack and configure ───────────────────────────────────────── -->
