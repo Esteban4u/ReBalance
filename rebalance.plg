@@ -27,7 +27,7 @@
   version="&version;"
   pluginURL="&pluginURL;"
   icon="/plugins/rebalance/images/rebalance.svg"
-  support="https://forums.unraid.net"
+  support="https://forums.unraid.net/topic/198334-rebalance-array-disk-usage-balancer/"
 >
 
 <CHANGES>
