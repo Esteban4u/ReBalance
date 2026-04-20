@@ -286,6 +286,7 @@ directly in HTML, which does work). Both fields must be present.
 ## Community Applications
 
 Plugin is submitted to CA. Current status: pending moderation.
+Forum thread has been moved to the official Plugin Support section (same URL).
 
 - **GitHub repo:** https://github.com/Esteban4u/ReBalance
 - **CA XML template:** `ReBalance.xml` in repo root
