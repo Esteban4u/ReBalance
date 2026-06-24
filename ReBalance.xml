@@ -1,7 +1,8 @@
 <?xml version="1.0"?>
 <Plugin>
   <Name>ReBalance</Name>
-  <Author>Esteban4u</Author>
+  <PluginAuthor>Esteban4u</PluginAuthor>
+  <Plugin>True</Plugin>
   <Version>2026.04.18</Version>
   <Icon>https://raw.githubusercontent.com/Esteban4u/ReBalance/main/plugin/images/rebalance.svg</Icon>
   <Overview>Balances disk usage percentage across mixed-capacity Unraid array drives by moving files from over-used to under-used disks.</Overview>
