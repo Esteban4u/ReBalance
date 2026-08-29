@@ -60,7 +60,7 @@ sudo apt-get install imagemagick
 
 ```bash
 # From WSL:
-cd /mnt/c/Users/steve/OneDrive/Documents/Scripts/ReBalance
+cd /mnt/c/Users/steve/Code/ReBalance
 bash package.sh
 ```
 
