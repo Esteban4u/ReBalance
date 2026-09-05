@@ -14,7 +14,7 @@ LOG_MAX=500
 TOLERANCE=2
 DRY_RUN=false
 USE_CACHE=true           # cache-assisted mode is the default execution path
-CACHE_BUFFER_KB=102400   # 100 GB default staging budget
+CACHE_BUFFER_KB=104857600  # 100 GB default staging budget (100 * 1024 * 1024 KB)
 STAGE_DIR=""             # set via --stage-dir; auto-detected if empty
 MIN_FILE_KB=0            # 0 = no filter; >0 skips files smaller than N KB
 
@@ -27,7 +27,7 @@ while [[ $# -gt 0 ]]; do
         --tolerance)    TOLERANCE="${2:-2}"; shift ;;
         --use-cache)    USE_CACHE=true ;;
         --no-cache)     USE_CACHE=false ;;
-        --cache-buffer) CACHE_BUFFER_KB="${2:-102400}"; shift ;;
+        --cache-buffer) CACHE_BUFFER_KB="${2:-104857600}"; shift ;;
         --stage-dir)    STAGE_DIR="${2}"; shift ;;
         --min-file-kb)  MIN_FILE_KB="${2:-0}"; shift ;;
         --stop)

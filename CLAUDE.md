@@ -280,6 +280,31 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 12. Cache staging buffer was 1024× too small (100 MB instead of 100 GB)
+Found while installing/testing the bug #11 fix locally: the dry-run's own log
+printed `"Cache staging buffer: 100 MB"` when it should have said 100 GB.
+`CACHE_BUFFER_KB=102400` — but 102400 KB is 100 **MB** (102400/1024), not
+100 GB (which needs 102400×1024 = 104,857,600 KB). The same 1024× error was
+present in three places, all consistently treating "1 GB" as "1024 KB"
+instead of "1,048,576 KB": `rebalance.sh`'s own default, `status.php`'s
+POST-value clamp bounds (`max(10240, min(10485760, ...))` — those numbers
+are literally the *correct* MB-scale values mislabeled as the GB-scale
+bounds), and the UI's GB→KB conversion (`bufGB * 1024`, missing a second
+`* 1024`).
+
+**Real-world impact**: since typical media files are almost always larger
+than 100 MB, cache-assisted mode's staging budget was almost always
+immediately exhausted by the first file or two, silently falling back to
+direct (uncached) moves for nearly everything (`_cache_has_space()` returns
+false → `"WARN: cache buffer full — moving ... directly"`) — meaning the
+"~1.5× faster" cache pipeline had likely never actually engaged for a real
+media library, this whole time, without ever surfacing an error.
+
+Fix: `CACHE_BUFFER_KB=104857600` in `rebalance.sh` (default + `--cache-buffer`
+fallback), `status.php` clamp bounds corrected to `10485760` (10 GB) /
+`2097152000` (2000 GB) matching the UI's 10-2000 GB input range, and the JS
+conversion changed to `bufGB * 1024 * 1024`.
+
 ---
 
 ## Status JSON fields (written by rebalance.sh)

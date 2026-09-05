@@ -781,7 +781,7 @@ window.startRebalance = function(dryRun) {
     if (dryRun) body.set('dry_run', '1');
     if (useCache) {
         body.set('use_cache', '1');
-        body.set('cache_buffer_kb', bufGB * 1024);
+        body.set('cache_buffer_kb', bufGB * 1024 * 1024);
         if (stageDir) body.set('stage_dir', stageDir);
     }
 
