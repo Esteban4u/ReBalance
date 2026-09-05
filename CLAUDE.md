@@ -406,7 +406,20 @@ conversion changed to `bufGB * 1024 * 1024`.
 
 ## Community Applications
 
-Plugin is submitted to CA. Current status: pending moderation.
+Plugin is submitted to CA. Current status: **still pending moderation as of 2026-09-05** —
+checked directly against CA's real live feed (`https://ca.unraid.net/assets/feed/
+applicationFeed.json`, ~25MB, the actual JSON the CA plugin itself downloads), zero matches
+for "rebalance", "Esteban4u", or "array disk usage" anywhere in it. Confirms the spec fix
+below (applied 2026-08-11) has **not** resolved the indexing gap nearly a month later — the
+next step really is the forum thread / a direct ping to Squidly271, not just waiting longer.
+
+**Found the same day**: `ReBalance.xml`'s `<Version>` was still stale at `2026.06.20` — missed
+during the 2026-09-05 release bump, which only updated `rebalance.plg`. Since CA indexes from
+`ReBalance.xml` specifically (not `rebalance.plg`), this alone could be enough to keep a
+plugin looking stale to CA even if the indexing gap were otherwise resolved. Fixed to match
+(`2026.09.05`) — worth double-checking both files stay in sync on every future release, not
+just `rebalance.plg`.
+
 Forum thread has been moved to the official Plugin Support section (same URL).
 
 **Root cause of pending status, found 2026-08-11:** Squidly271 (CA's
@@ -441,7 +454,7 @@ Plugins tab, which reads our local `.plg` `icon=` attribute directly and
 - **CA XML template:** `ReBalance.xml` in repo root
 - **Forum thread:** https://forums.unraid.net/topic/198334-rebalance-array-disk-usage-balancer/
 - **Install URL:** `https://raw.githubusercontent.com/Esteban4u/ReBalance/main/rebalance.plg`
-- **Current release:** `2026.06.20` — tarball MD5: `84248869a331ccf515f05e13f1ab2649`
+- **Current release:** `2026.09.05` — tarball MD5: `5a2840b9b9c7da2f4b7066a580c64064`
 
 Plugins are NOT submitted to a centralised repo like Docker apps. CA indexes
 them via the `ReBalance.xml` template and the `pluginURL` in `rebalance.plg`.
