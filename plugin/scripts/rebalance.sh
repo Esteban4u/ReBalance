@@ -13,7 +13,7 @@ LOG_MAX=500
 
 TOLERANCE=2
 DRY_RUN=false
-USE_CACHE=false
+USE_CACHE=true           # cache-assisted mode is the default execution path
 CACHE_BUFFER_KB=102400   # 100 GB default staging budget
 STAGE_DIR=""             # set via --stage-dir; auto-detected if empty
 MIN_FILE_KB=0            # 0 = no filter; >0 skips files smaller than N KB
@@ -26,6 +26,7 @@ while [[ $# -gt 0 ]]; do
         --dry-run)      DRY_RUN=true ;;
         --tolerance)    TOLERANCE="${2:-2}"; shift ;;
         --use-cache)    USE_CACHE=true ;;
+        --no-cache)     USE_CACHE=false ;;
         --cache-buffer) CACHE_BUFFER_KB="${2:-102400}"; shift ;;
         --stage-dir)    STAGE_DIR="${2}"; shift ;;
         --min-file-kb)  MIN_FILE_KB="${2:-0}"; shift ;;
@@ -93,6 +94,8 @@ PLAN_SRC_COUNT=0
 FILES_TOTAL=0
 FILES_DONE=0
 FILES_SKIPPED=0
+FILES_OVERSHOOT=0     # planned onto a disk that ends up over target+tolerance (no strict-fit disk existed)
+FILES_UNPLACEABLE=0   # no disk (not even an overshoot candidate) had room for this file
 BYTES_TOTAL=0    # KB
 BYTES_DONE=0     # KB
 RATE_KBS=0
@@ -230,6 +233,8 @@ write_status() {
     "files_total": ${FILES_TOTAL},
     "files_done": ${FILES_DONE},
     "files_skipped": ${FILES_SKIPPED},
+    "files_overshoot": ${FILES_OVERSHOOT},
+    "files_unplaceable": ${FILES_UNPLACEABLE},
     "bytes_total_kb": ${BYTES_TOTAL},
     "bytes_done_kb": ${BYTES_DONE},
     "pct_done": ${pct_done},
@@ -298,6 +303,7 @@ build_plan() {
     P_COUNT=0
     P_STATUS=(); P_SIZE=(); P_SRC=(); P_DST=()
     FILES_TOTAL=0; BYTES_TOTAL=0
+    FILES_OVERSHOOT=0; FILES_UNPLACEABLE=0
 
     # Identify source disks (above target + tolerance), sort by pct DESC
     local sources=()
@@ -329,6 +335,8 @@ build_plan() {
 
         local planned_kb=0
         local file_count=0
+        local overshoot_count=0
+        local unplaceable_count=0
         local size_opt=""
         (( MIN_FILE_KB > 0 )) && size_opt="-size +${MIN_FILE_KB}k"
 
@@ -345,22 +353,47 @@ build_plan() {
             # Skip files directly in the mount root (no share dir)
             [[ -z "$share" || "$share" == "$rel" ]] && continue
 
-            # Find best destination: lowest pct that can accept this file
+            # Find best destination: lowest pct that can accept this file within
+            # tolerance, falling back to the disk with the SMALLEST resulting
+            # overshoot if no strict-fit destination exists (large files often
+            # can't land anywhere within a tight tolerance once destinations
+            # fill up — without this fallback they were silently dropped from
+            # the plan entirely, leaving the source disk under-corrected with
+            # no indication why).
             local best="" best_pct=9999
+            local fb_best="" fb_new_pct=999999
             for dst in "${DISKS[@]}"; do
                 [[ "$dst" == "$src" ]] && continue
-                # Only send to disks that are below target + tolerance
+                # Never use an already-over-target disk as a destination
                 (( D_PCT[$dst] >= TARGET_PCT + TOLERANCE )) && continue
-                # Must have room
+                # Must physically have room
                 (( D_FREE[$dst] < fsize_kb )) && continue
-                # Would it stay within tolerance after receiving the file?
                 local new_pct=$(( (D_USED[$dst] + fsize_kb) * 100 / D_SIZE[$dst] ))
-                (( new_pct > TARGET_PCT + TOLERANCE )) && continue
-                # Pick lowest current pct (most free relatively)
-                (( D_PCT[$dst] < best_pct )) && { best="$dst"; best_pct="${D_PCT[$dst]}"; }
+                if (( new_pct <= TARGET_PCT + TOLERANCE )); then
+                    # Strict fit: pick lowest current pct (most free relatively)
+                    (( D_PCT[$dst] < best_pct )) && { best="$dst"; best_pct="${D_PCT[$dst]}"; }
+                else
+                    # Would overshoot tolerance: track the smallest overshoot as a fallback
+                    (( new_pct < fb_new_pct )) && { fb_best="$dst"; fb_new_pct="$new_pct"; }
+                fi
             done
 
-            [[ -z "$best" ]] && continue
+            local used_fallback=false
+            if [[ -z "$best" && -n "$fb_best" ]]; then
+                best="$fb_best"
+                used_fallback=true
+            fi
+
+            if [[ -z "$best" ]]; then
+                (( unplaceable_count++ )); (( FILES_UNPLACEABLE++ ))
+                log "UNPLACEABLE ($(fmt_kb $fsize_kb)): $(basename "$fpath") — no destination has room"
+                continue
+            fi
+
+            if $used_fallback; then
+                (( overshoot_count++ )); (( FILES_OVERSHOOT++ ))
+                log "OVERSHOOT ($(fmt_kb $fsize_kb)): $(basename "$fpath") → ${best} (would reach ${fb_new_pct}%, above target+tolerance — best available option)"
+            fi
 
             local dst_path="${D_MOUNT[$best]}/${rel}"
             P_STATUS[$P_COUNT]="pending"
@@ -387,11 +420,17 @@ build_plan() {
 
         done < <(find "${src_mp}/" -type f ${size_opt} ! -path "*/lost+found/*" -printf '%s\t%p\n' 2>/dev/null)
 
-        log "  ${src}: planned $(fmt_kb $planned_kb) to move"
+        local src_note=""
+        (( overshoot_count > 0 || unplaceable_count > 0 )) && \
+            src_note=" (${overshoot_count} placed via overshoot fallback, ${unplaceable_count} unplaceable)"
+        log "  ${src}: planned $(fmt_kb $planned_kb) to move${src_note}"
     done
 
     FILES_TOTAL=$P_COUNT
-    log "Plan complete: ${P_COUNT} files, $(fmt_kb $BYTES_TOTAL) total"
+    local plan_note=""
+    (( FILES_OVERSHOOT > 0 || FILES_UNPLACEABLE > 0 )) && \
+        plan_note=" — ${FILES_OVERSHOOT} files placed via overshoot fallback, ${FILES_UNPLACEABLE} files unplaceable (see log for details)"
+    log "Plan complete: ${P_COUNT} files, $(fmt_kb $BYTES_TOTAL) total${plan_note}"
     write_status
 }
 

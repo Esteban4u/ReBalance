@@ -258,12 +258,12 @@ $csrf    = $var['csrf_token'] ?? '';
     </div>
     <div>
       <label>
-        <input type="checkbox" id="use-cache" onchange="toggleCacheOpts()">
+        <input type="checkbox" id="use-cache" checked onchange="toggleCacheOpts()">
         Use SSD Cache as staging buffer
         <span style="color:#888;font-size:12px">(~1.5× faster — pipelines reads &amp; writes)</span>
       </label>
     </div>
-    <div id="cache-opts" style="display:none;margin-left:22px;margin-top:6px">
+    <div id="cache-opts" style="display:block;margin-left:22px;margin-top:6px">
       <div style="margin-bottom:6px">
         <label for="cache-buffer-gb">Staging budget: </label>
         <input type="number" id="cache-buffer-gb" value="100" min="10" max="2000" style="width:65px">
@@ -360,6 +360,11 @@ $csrf    = $var['csrf_token'] ?? '';
     <div class="stat-card">
       <div class="stat-label">Skipped / Errors</div>
       <div class="stat-value" id="st-skipped">0</div>
+    </div>
+    <div class="stat-card" id="st-placement-card" style="display:none">
+      <div class="stat-label">Placement Issues</div>
+      <div class="stat-value" id="st-placement">0</div>
+      <div class="stat-sub" id="st-placement-sub"></div>
     </div>
     <div class="stat-card" id="st-cache-card" style="display:none">
       <div class="stat-label">Cache Staged</div>
@@ -499,6 +504,22 @@ function renderStats(data) {
     document.getElementById('st-elapsed').textContent    = fmtSec(data.elapsed_sec||0);
     document.getElementById('st-eta').textContent        = data.state==='running' ? fmtSec(s.eta_sec||0) : '—';
     document.getElementById('st-skipped').textContent    = s.files_skipped||0;
+
+    // Placement issues card — files planning couldn't fit cleanly within
+    // tolerance (moved anyway to the least-bad disk) or couldn't fit anywhere
+    var overshoot    = s.files_overshoot||0;
+    var unplaceable  = s.files_unplaceable||0;
+    var placeCard    = document.getElementById('st-placement-card');
+    if (overshoot > 0 || unplaceable > 0) {
+        placeCard.style.display = '';
+        document.getElementById('st-placement').textContent = (overshoot + unplaceable);
+        var bits = [];
+        if (overshoot)   bits.push(overshoot+' over-tolerance');
+        if (unplaceable) bits.push(unplaceable+' unplaceable');
+        document.getElementById('st-placement-sub').textContent = bits.join(', ') + ' — see log';
+    } else {
+        placeCard.style.display = 'none';
+    }
 
     // Cache staging card (only shown when use_cache is active)
     var cacheCard = document.getElementById('st-cache-card');
