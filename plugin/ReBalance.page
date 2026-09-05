@@ -489,7 +489,7 @@ function renderStats(data) {
     var panel = document.getElementById('stats-panel');
 
     if (data.state === 'idle') { panel.style.display='none'; return; }
-    panel.style.display = '';
+    panel.style.display = 'block';
 
     var pct = s.pct_done || 0;
     document.getElementById('overall-fill').style.width = pct+'%';
@@ -541,7 +541,7 @@ function renderStats(data) {
 function renderPlan(plan, planCount) {
     var section = document.getElementById('plan-section');
     if (!plan || !plan.length) { section.style.display='none'; return; }
-    section.style.display = '';
+    section.style.display = 'block';
 
     var shown = plan.length;
     var label = document.getElementById('plan-count-label');
@@ -574,7 +574,7 @@ function renderLog(log) {
     if (!log || !log.length) return;
     var box  = document.getElementById('log-box');
     var section = document.getElementById('log-section');
-    section.style.display = '';
+    section.style.display = 'block';
 
     if (log.length !== lastLogCount) {
         lastLogCount = log.length;
@@ -608,7 +608,7 @@ function showBanner(state, dryRun, stats) {
     };
 
     if (!msgs[state]) { banner.style.display='none'; return; }
-    banner.style.display = '';
+    banner.style.display = 'block';
     banner.className     = 'banner-'+(cls[state]||'running');  // reset
     banner.className    += ' '+(cls[state]||'banner-running');
     banner.innerHTML     = msgs[state];

@@ -280,6 +280,34 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 12c. Statistics panel, Move Plan table, Log panel, and status banner never actually rendered
+Found while explaining the "Cache Staged" stat card location to Steve — he reported that even
+scrolled all the way to the bottom of the page, no Statistics panel appeared at all during a
+live run. Traced to a real, longstanding JS bug affecting **four** major dynamic sections:
+`renderStats()`, `renderPlan()`, `renderLog()`, and `showBanner()` all "show" their section by
+doing `element.style.display = '';` (clearing any inline override) — but `#stats-panel`,
+`#plan-section`, `#log-section`, and `#status-banner` are all hidden via a **stylesheet rule**
+(`display:none` declared in the `<style>` block), not an inline attribute. Clearing an inline
+style doesn't override a stylesheet rule — the computed style falls back to the CSS cascade,
+which is still `display:none`. Net effect: the status banner at the top of the page, the entire
+Statistics panel (Files Moved, Data Moved, Cache Staged, everything), and the Move Plan table
+have likely **never actually appeared for anyone**, on any run, ever — only the inline
+action-progress bar next to the Stop button worked, because that one correctly sets
+`wrap.style.display = 'flex'` (a real value, not an empty string).
+
+Contrast with the two `stat-card` sub-elements (`st-placement-card`, `st-cache-card`) added in
+bug #11/#12: those are fine using the same `.style.display=''` pattern, because their hidden
+state comes from an inline `style="display:none"` attribute directly in the HTML, not a
+stylesheet rule with the same specificity — clearing an inline-only override correctly falls
+back to the element's natural `block` default. The bug only bites when a *stylesheet* rule is
+what's doing the hiding.
+
+Fix: changed all four to `element.style.display = 'block'` (a real value, matching what these
+`<div>` sections should render as). Deployed to the live install and confirmed via `php -l` +
+grep that all four now use the corrected assignment. **Requires a browser tab refresh to take
+effect** — unlike the `status.php` polling fix (bug #12b), this is a one-time-loaded JS/HTML
+file, not something an open tab's ongoing poll cycle can self-heal.
+
 ### 12b. "Cache pool" dropdown stays empty for the whole run if the page loads mid-run
 Found via a screenshot Steve sent during a live rebalance execution: the Settings panel's
 "Cache pool" dropdown was completely empty, despite the run genuinely staging files through
