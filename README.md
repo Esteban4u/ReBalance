@@ -16,7 +16,8 @@ If you have a mix of 4 TB and 2 TB drives in the same array, Unraid's default fi
 
 - **Analysis mode** — build and review a full move plan before touching any files
 - **Minimum file size filter** — skip small files (subtitles, NFOs, thumbnails) and focus moves on content
-- **Optional SSD cache staging** — pipelines source reads with destination writes for ~1.5× throughput
+- **SSD cache staging** (on by default) — pipelines source reads with destination writes for ~1.5× throughput
+- **Overshoot fallback** — large files that can't fit any destination cleanly within tolerance still get moved (to whichever disk overshoots least) instead of being silently skipped, with visibility into how often it happens
 - **Live progress bar** — transfer rate, elapsed time, and estimated time remaining
 - **Planning progress** — shows which source disk is being scanned (Disk X of Y) with ETA
 - **Configurable tolerance** — disks within ±N% of target are left alone (default ±2%)
@@ -73,9 +74,9 @@ Click **Stop** to safely interrupt the run. No files are left in an inconsistent
 |---|---|---|
 | Tolerance | 2% | Disks within ±N% of the target are considered balanced and left alone |
 | Dry Run | — | Start Analysis always performs a dry run; Start Rebalance moves files |
-| Use SSD Cache | Off | Enables cache staging pipeline for ~1.5× faster throughput |
+| Use SSD Cache | On | Enables cache staging pipeline for ~1.5× faster throughput (still a real toggle) |
 | Staging budget | 100 GB | Maximum cache space used for temporary staging files |
-| Min file size | 0 MB | Skip files smaller than this (0 = no filter) |
+| Min file size | 0 MB | Skip files smaller than this (0 = no filter) — purely a time tradeoff, not required for correctness |
 
 ---
 
@@ -83,7 +84,7 @@ Click **Stop** to safely interrupt the run. No files are left in an inconsistent
 
 1. Scans all array disks and calculates the **weighted average usage %** across all drives
 2. Identifies **source disks** (above target + tolerance) and **destination disks** (below target − tolerance)
-3. Builds a move plan — largest files first — assigning each file to the best-fit destination
+3. Builds a move plan — files are processed in filesystem order (not sorted, to keep planning fast on large libraries) — assigning each file to the lowest-usage destination that can accept it within tolerance. If no destination fits cleanly (common for very large files once destinations fill up), it falls back to whichever destination overshoots tolerance the *least*, rather than silently dropping the file from the plan — tracked separately as "Placement Issues" so you can see when this happens
 4. Executes moves via `rsync -aX`, preserving all extended attributes
 5. Updates virtual disk state as each file is planned/moved to track remaining capacity
 
