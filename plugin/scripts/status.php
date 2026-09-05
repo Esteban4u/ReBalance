@@ -256,9 +256,14 @@ $tolerance = max(1, min(20, (int)($_GET['tolerance'] ?? 2)));
 
 if (is_running()) {
     if (file_exists(STATUS_FILE)) {
-        // Script is running and has already written its status file
-        ob_clean();
-        echo file_get_contents(STATUS_FILE);
+        // Script is running and has already written its status file.
+        // Merge in cache_pools — the bash script never writes this field itself,
+        // so a fresh page load/refresh while a run is already in progress would
+        // otherwise never see it and the "Cache pool" dropdown would stay empty
+        // for the whole run (it's only added on the idle-state branch below).
+        $payload = json_decode(file_get_contents(STATUS_FILE), true) ?: [];
+        $payload['cache_pools'] = detect_cache_pools();
+        json_out($payload);
     } else {
         // Script just started — lock file exists but status not written yet.
         // Return a synthetic 'starting' payload so the poller keeps going.
@@ -284,6 +289,7 @@ if (is_running()) {
             'plan'       => [],
             'log'        => [],
             'disks'      => $live['disks'],
+            'cache_pools'=> detect_cache_pools(),
         ]);
     }
     exit;

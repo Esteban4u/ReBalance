@@ -280,6 +280,27 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 12b. "Cache pool" dropdown stays empty for the whole run if the page loads mid-run
+Found via a screenshot Steve sent during a live rebalance execution: the Settings panel's
+"Cache pool" dropdown was completely empty, despite the run genuinely staging files through
+the cache correctly (confirmed separately via the API — `cache_staged_kb` was climbing as
+expected). Root cause: `status.php`'s `GET` handler only adds `cache_pools` to the response on
+the **idle**-state branch (`$payload['cache_pools'] = detect_cache_pools();`); the
+**is_running()** branch just echoes the bash script's raw status file verbatim, and
+`rebalance.sh` never writes a `cache_pools` key itself (it doesn't need to — it already knows
+its own stage dir). So if the browser's *first* status fetch happens to land while a run is
+already in progress (e.g. the page is loaded/refreshed mid-run), `data.cache_pools` is
+`undefined` in every single poll response for the rest of that run, and
+`populateCachePools()` — which only runs `if (data.cache_pools)` — never fires. The dropdown
+stays blank until the run finishes and the response reverts to the idle branch.
+
+Fix: the `is_running()` branch now `json_decode`s the status file and merges in
+`detect_cache_pools()` before re-encoding, instead of echoing the raw file; the synthetic
+"starting" payload gets the same field added. Verified live against an actual in-progress run
+via `php -r ... include "status.php"` — confirmed `cache_pools` now appears correctly with
+`state:"running"`. Since the page polls every 2s, an already-open tab self-heals within a
+couple of poll cycles once this ships — no page reload needed.
+
 ### 12. Cache staging buffer was 1024× too small (100 MB instead of 100 GB)
 Found while installing/testing the bug #11 fix locally: the dry-run's own log
 printed `"Cache staging buffer: 100 MB"` when it should have said 100 GB.
