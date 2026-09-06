@@ -486,6 +486,13 @@ just `rebalance.plg`.
 
 Forum thread has been moved to the official Plugin Support section (same URL).
 
+**Update (2026-09-06)**: checked the thread for replies to the 2026-09-05 post to Squidly271.
+No response from Squidly271 directly, but a forum moderator (**JorgeB**) replied redirecting
+the CA-indexing question to the official support channel instead of continuing on the forum:
+**https://product.unraid.net/b/community-apps-submission-support**. This is the real next step
+— submit the same question there (PR #2 fix applied over a month ago, still not in the CA
+feed) rather than waiting further on the forum thread.
+
 **Root cause of pending status, found 2026-08-11:** Squidly271 (CA's
 maintainer) forked the repo on 2026-05-04 and opened
 [PR #2](https://github.com/Esteban4u/ReBalance/pull/2) ("Fix out of spec
