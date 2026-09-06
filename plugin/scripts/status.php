@@ -188,6 +188,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $tolerance     = max(1, min(20, (int)($_POST['tolerance']      ?? 2)));
     $dry_run       = !empty($_POST['dry_run']);
     $use_cache     = !empty($_POST['use_cache']);
+    $cache_buffer_auto = !empty($_POST['cache_buffer_auto']);
     // Bounds match the UI's 10-2000 GB range; 1 GB = 1024*1024 KB
     $cache_buffer  = max(10485760, min(2097152000, (int)($_POST['cache_buffer_kb'] ?? 104857600)));
     $stage_dir     = trim($_POST['stage_dir']    ?? '');
@@ -212,8 +213,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         $args  = '--tolerance ' . escapeshellarg((string)$tolerance);
         if ($dry_run)   $args .= ' --dry-run';
-        if ($use_cache) $args .= ' --use-cache --cache-buffer ' . escapeshellarg((string)$cache_buffer)
-                               . ' --stage-dir ' . escapeshellarg($stage_dir);
+        if ($use_cache) {
+            $args .= ' --use-cache';
+            // Auto mode: omit --cache-buffer entirely so the script sizes it
+            // itself from the plan actually built (see auto_size_cache_buffer()
+            // in rebalance.sh) instead of the fixed value the GB field defaults to.
+            if (!$cache_buffer_auto) {
+                $args .= ' --cache-buffer ' . escapeshellarg((string)$cache_buffer);
+            }
+            $args .= ' --stage-dir ' . escapeshellarg($stage_dir);
+        }
         if ($min_file_kb > 0) $args .= ' --min-file-kb ' . escapeshellarg((string)$min_file_kb);
         $cmd   = escapeshellarg(SCRIPT) . ' ' . $args;
 

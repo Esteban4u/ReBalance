@@ -265,6 +265,13 @@ $csrf    = $var['csrf_token'] ?? '';
     </div>
     <div id="cache-opts" style="display:block;margin-left:22px;margin-top:6px">
       <div style="margin-bottom:6px">
+        <label>
+          <input type="checkbox" id="cache-buffer-auto" checked onchange="toggleAutoBuffer()">
+          Auto-size staging budget
+          <span style="color:#888;font-size:12px">(sized to the plan's two largest files, capped at 50% of free cache space)</span>
+        </label>
+      </div>
+      <div id="cache-buffer-manual" style="margin-bottom:6px;display:none">
         <label for="cache-buffer-gb">Staging budget: </label>
         <input type="number" id="cache-buffer-gb" value="100" min="10" max="2000" style="width:65px">
         <span>GB</span>
@@ -769,6 +776,7 @@ function poll() {
 window.startRebalance = function(dryRun) {
     var tol       = parseInt(document.getElementById('tolerance').value)||2;
     var useCache  = document.getElementById('use-cache').checked;
+    var bufAuto   = document.getElementById('cache-buffer-auto').checked;
     var bufGB     = parseInt(document.getElementById('cache-buffer-gb').value)||100;
     var stageDir   = document.getElementById('stage-pool')
                        ? document.getElementById('stage-pool').value : '';
@@ -781,7 +789,11 @@ window.startRebalance = function(dryRun) {
     if (dryRun) body.set('dry_run', '1');
     if (useCache) {
         body.set('use_cache', '1');
-        body.set('cache_buffer_kb', bufGB * 1024 * 1024);
+        if (bufAuto) {
+            body.set('cache_buffer_auto', '1');
+        } else {
+            body.set('cache_buffer_kb', bufGB * 1024 * 1024);
+        }
         if (stageDir) body.set('stage_dir', stageDir);
     }
 
@@ -834,6 +846,12 @@ window.clearResults = function() {
 window.toggleCacheOpts = function() {
     var on = document.getElementById('use-cache').checked;
     document.getElementById('cache-opts').style.display = on ? '' : 'none';
+};
+
+// Toggle manual staging-budget field based on the Auto-size checkbox
+window.toggleAutoBuffer = function() {
+    var auto = document.getElementById('cache-buffer-auto').checked;
+    document.getElementById('cache-buffer-manual').style.display = auto ? 'none' : '';
 };
 
 // ── Dark mode ─────────────────────────────────────────────────────────────

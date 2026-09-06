@@ -14,7 +14,10 @@ LOG_MAX=500
 TOLERANCE=2
 DRY_RUN=false
 USE_CACHE=true           # cache-assisted mode is the default execution path
-CACHE_BUFFER_KB=104857600  # 100 GB default staging budget (100 * 1024 * 1024 KB)
+CACHE_BUFFER_KB=104857600  # 100 GB default staging budget (100 * 1024 * 1024 KB) — only
+                           # used as-is when --cache-buffer is explicit; otherwise
+                           # auto-sized after planning, see auto_size_cache_buffer()
+CACHE_BUFFER_EXPLICIT=false
 STAGE_DIR=""             # set via --stage-dir; auto-detected if empty
 MIN_FILE_KB=0            # 0 = no filter; >0 skips files smaller than N KB
 
@@ -27,7 +30,7 @@ while [[ $# -gt 0 ]]; do
         --tolerance)    TOLERANCE="${2:-2}"; shift ;;
         --use-cache)    USE_CACHE=true ;;
         --no-cache)     USE_CACHE=false ;;
-        --cache-buffer) CACHE_BUFFER_KB="${2:-104857600}"; shift ;;
+        --cache-buffer) CACHE_BUFFER_KB="${2:-104857600}"; CACHE_BUFFER_EXPLICIT=true; shift ;;
         --stage-dir)    STAGE_DIR="${2}"; shift ;;
         --min-file-kb)  MIN_FILE_KB="${2:-0}"; shift ;;
         --stop)
@@ -459,6 +462,90 @@ _cache_has_space() {
 }
 
 ##############################################################################
+# Auto-size the cache buffer (skipped entirely if --cache-buffer was given
+# explicitly — manual overrides always win and are never recalculated out
+# from under the user).
+#
+# The cache-assisted executor's only real benefit is overlap: while file[i] is
+# written to its destination, file[i+1] is read into staging concurrently. So
+# the buffer only ever needs to hold the two biggest files that could still be
+# in-flight together — not the whole plan, and not just the single largest
+# file (a lone large file gets zero benefit from staging: it would add a
+# redundant read-then-reread hop instead of one direct copy).
+#
+# Called twice:
+#   - mode=initial (before execution starts): considers the WHOLE plan. If the
+#     plan is only 1 file, there's never any lookahead possible for the whole
+#     run, so caching is disabled outright rather than sized for nothing.
+#   - mode=live (periodically during a long cache-assisted run, from inside
+#     execute_plan_cached's own loop): re-derives max1/max2 from only the
+#     still-PENDING files, and re-checks the pool's free space fresh each
+#     time — so on a long-running plan, the self-imposed budget tracks the
+#     pool's actual free space as it changes over time (other things writing
+#     to the same pool, e.g. Docker/VMs, or space freed elsewhere), instead of
+#     staying pinned to a snapshot taken once before execution began.
+##############################################################################
+auto_size_cache_buffer() {
+    local mode="${1:-initial}"
+    $USE_CACHE || return
+    $CACHE_BUFFER_EXPLICIT && return
+    (( P_COUNT == 0 )) && return
+
+    if [[ "$mode" == "initial" && $P_COUNT -eq 1 ]]; then
+        log "Auto cache-buffer: only 1 file in the plan — no next file to overlap with, disabling cache-assisted mode (a direct copy does the same work in one I/O pass instead of two)"
+        USE_CACHE=false
+        return
+    fi
+
+    local max1=0 max2=0 sz pending=0
+    for (( _i=0; _i<P_COUNT; _i++ )); do
+        [[ "${P_STATUS[$_i]}" != "pending" ]] && continue
+        (( pending++ ))
+        sz="${P_SIZE[$_i]}"
+        if (( sz > max1 )); then
+            max2=$max1; max1=$sz
+        elif (( sz > max2 )); then
+            max2=$sz
+        fi
+    done
+    (( pending == 0 )) && return
+
+    # +10% safety margin so both files genuinely fit alongside each other, not
+    # right up against the edge of the buffer
+    local needed_kb=$(( (max1 + max2) * 11 / 10 ))
+
+    local free_kb
+    free_kb=$(df -k "$STAGE_DIR" 2>/dev/null | awk 'NR==2{print $4}')
+    [[ -z "$free_kb" ]] && free_kb=$(df -k "$(dirname "$STAGE_DIR")" 2>/dev/null | awk 'NR==2{print $4}')
+    free_kb=${free_kb:-0}
+
+    # Never auto-claim more than half of the pool's CURRENT free space — this
+    # pool commonly hosts other live data too (Docker appdata, VMs), not just
+    # rebalance staging, and re-checking it live (not just once at the start)
+    # is what lets the budget track the pool's actual condition over a long run
+    local cap_kb=$(( free_kb / 2 ))
+
+    local final_kb=$needed_kb
+    (( final_kb > cap_kb )) && final_kb=$cap_kb
+
+    # Only log when the budget actually moves meaningfully (>=5%), so a long
+    # multi-file run doesn't spam the log every single iteration
+    local old_kb=$CACHE_BUFFER_KB
+    local base=$(( old_kb > 0 ? old_kb : 1 ))
+    local delta=$(( final_kb > old_kb ? final_kb - old_kb : old_kb - final_kb ))
+    if (( old_kb == 0 || delta * 100 / base >= 5 )); then
+        local verb="sized"; [[ "$mode" == "live" ]] && verb="re-sized"
+        if (( final_kb < needed_kb )); then
+            log "Auto cache-buffer ${verb}: largest two pending files need $(fmt_kb $needed_kb), capped to $(fmt_kb $final_kb) (50% of $(fmt_kb $free_kb) free on the cache pool) — files too big to fit will fall back to a direct move automatically"
+        else
+            log "Auto cache-buffer ${verb}: $(fmt_kb $final_kb) (largest two pending files: $(fmt_kb $max1) + $(fmt_kb $max2), +10% margin)"
+        fi
+    fi
+
+    CACHE_BUFFER_KB=$final_kb
+}
+
+##############################################################################
 # Rate / ETA update helper (shared by both executors)
 ##############################################################################
 _update_rate() {
@@ -499,6 +586,12 @@ execute_plan_cached() {
     for (( i=0; i<P_COUNT; i++ )); do
         [[ "$STATE" != "running" ]] && break
         [[ "${P_STATUS[$i]}" != "pending" ]] && continue
+
+        # Re-check the pool's actual free space and re-derive the budget from
+        # the still-pending files before deciding this one — keeps a long run
+        # tracking the pool's real condition instead of a stale start-of-run
+        # snapshot. No-op if --cache-buffer was set explicitly.
+        auto_size_cache_buffer live
 
         local size_kb="${P_SIZE[$i]}"
         local src="${P_SRC[$i]}"
@@ -722,7 +815,13 @@ refresh_disk_stats() {
 write_status
 
 log "ReBalance started — tolerance: ±${TOLERANCE}%  dry_run: ${DRY_RUN}  use_cache: ${USE_CACHE}"
-$USE_CACHE && log "Cache staging buffer: $(fmt_kb $CACHE_BUFFER_KB)  staging dir: $STAGE_DIR"
+if $USE_CACHE; then
+    if $CACHE_BUFFER_EXPLICIT; then
+        log "Cache staging buffer: $(fmt_kb $CACHE_BUFFER_KB) (explicit)  staging dir: $STAGE_DIR"
+    else
+        log "Cache staging buffer: auto (sized once the plan is known)  staging dir: $STAGE_DIR"
+    fi
+fi
 discover_disks
 
 if [[ ${#DISKS[@]} -eq 0 ]]; then
@@ -743,6 +842,9 @@ if [[ $P_COUNT -eq 0 ]]; then
     write_status
     exit 0
 fi
+
+auto_size_cache_buffer initial
+write_status
 
 if $DRY_RUN; then
     log "Dry run complete. ${P_COUNT} files ($(fmt_kb $BYTES_TOTAL)) would be moved."
