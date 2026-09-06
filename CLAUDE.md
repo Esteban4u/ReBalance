@@ -280,6 +280,70 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 14. Cache-assisted mode's staging buffer was a fixed guess — now auto-sized dynamically
+`--cache-buffer` was previously either the fixed 100GB default or an explicit manual value,
+with no relationship to what a given plan actually needed or what the cache pool could
+actually spare. Two real problems with that: an oversized fixed value could crowd out other
+consumers of the pool (this box's `ssd_cache` also hosts Docker's directory-mode storage, not
+just rebalance staging — see the sibling `UnRaid-Troubleshooting/HARDWARE.md`), and an
+undersized one silently fell back every file to a slower direct copy (the same class of
+problem as bug #12 above, just from a different cause).
+
+New `auto_size_cache_buffer()` in `rebalance.sh`: sizes the buffer to just the **two** largest
+files that could realistically be in flight together (current + lookahead — the only pair
+cache mode's read/write overlap ever needs), not the whole plan and not just the single
+largest file. A 1-file plan disables cache mode outright, since a lone file gets zero overlap
+benefit — staging it would add a redundant read-then-reread hop instead of one direct copy.
+Capped at 50% of the cache pool's **live** free space (a fresh `df` each time, not a config
+value), so it can never grow to crowd out other pool consumers.
+
+Runs twice: once after planning (`mode=initial`), and then again before every file during
+execution (`mode=live`, called from inside `execute_plan_cached()`'s own loop) — recomputing
+from only the still-pending files and a fresh `df` each time, so a long-running plan's
+self-imposed budget tracks the pool's actual free space as it changes over the course of the
+run (something else writing to the same pool, or space freed elsewhere), instead of staying
+pinned to a start-of-run snapshot. Skipped entirely whenever `--cache-buffer` is passed
+explicitly — manual overrides always win and are never recalculated out from under the user.
+Log lines are throttled to real (≥5%) budget changes so a long run doesn't spam the log every
+iteration.
+
+**UI wiring was the actual gap, not just the shell script**: `status.php` always forwarded an
+explicit `cache_buffer_kb` to `rebalance.sh` on every GUI-driven start, which would have
+silently defeated this feature for every real user of the plugin — only a manual CLI
+invocation without `--cache-buffer` would ever have benefited. Added an "Auto-size staging
+budget" checkbox to `ReBalance.page` (checked by default) that, when on, sends
+`cache_buffer_auto=1` instead of a GB value; `status.php` now omits `--cache-buffer` from the
+launched command entirely in that case.
+
+Validated on Pro-WS-W680-ACE (2026-09-05): `bash -n` / `php -l` clean on both the repo and the
+deployed copy, and a live dry-run against the real array ran clean end-to-end. The periodic
+`mode=live` resize path specifically hasn't yet been exercised against a real multi-file plan
+(the array happened to be fully balanced right after this shipped) — worth checking the log
+for `Auto cache-buffer re-sized:` lines the next time a genuine multi-disk run happens.
+
+### 13. Candidate files were scanned in raw filesystem order, not size order
+Found on Pro-WS-W680-ACE (2026-09-05): an unfiltered run on a real, large array crawled at
+~19 KB/s because one source disk's file list was 99.58% files ≤200KB — UrBackup's own
+deduplication pool — making up ~82% of a 195,590-file plan for a negligible fraction of the
+actual bytes that needed to move. Root cause: `build_plan()`'s per-source-disk `find` scan fed
+the placement loop — which stops as soon as that disk is back within tolerance — files in raw
+filesystem traversal order, so it could wander through a huge tiny-file pool long before ever
+reaching the handful of large files that would have closed the gap in far fewer moves.
+
+Fix: pipe the `find ... -printf '%s\t%p\n'` output through `sort -t$'\t' -k1,1 -rn` (numeric,
+descending by size) before the placement loop, so the biggest eligible files are always tried
+first. Since the loop already stops the moment tolerance is met, size-first ordering makes it
+naturally skip tiny-file pools entirely whenever a disk's largest files alone are enough —
+no `--min-file-kb` tuning or repeated manual runs required for the common case (that flag
+still exists as an explicit floor for "never move anything under N KB regardless").
+
+Validated directly: the same real disk that previously needed 326 files (a manually-set 200KB
+floor) or 2,353 files (50KB floor — worse bytes-per-file ratio, not better) resolved in a
+**single** largest-file move (135GB) once sorted — landing the disk exactly at the 54% target
+in one pass. See `UnRaid-Troubleshooting/CLAUDE.md`'s 2026-09-05 entries for the full
+investigation that led here (the coarse-to-fine `--min-file-kb` staging workaround this makes
+largely unnecessary, plus the disk6 percentage-rounding false alarm hit along the way).
+
 ### 12c. Statistics panel, Move Plan table, Log panel, and status banner never actually rendered
 Found while explaining the "Cache Staged" stat card location to Steve — he reported that even
 scrolled all the way to the bottom of the page, no Statistics panel appeared at all during a
@@ -471,6 +535,10 @@ create a new GitHub Release with the tarball, update the `<URL>` in `rebalance.p
 - SSD cache pool: `ssd_cache` at `/mnt/ssd_cache`
 - **Real run completed 2026-04-18** using 52 MB min file size filter overnight
   with SSD cache staging — array came out almost perfectly balanced
+- **Real run completed 2026-09-05** (post-migration to the 22-disk `Pro-WS-W680-ACE` array,
+  20 data disks, target 54% ±2%): only disk6 (57%) needed correction. Used as the validation
+  case for both #13 (largest-first sort) and #14 (dynamic cache buffer) above — resolved in a
+  single 135GB file move once sorted, landing disk6 exactly at the 54% target.
 - All disks formatted XFS
 
 ---
