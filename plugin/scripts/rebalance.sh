@@ -340,6 +340,11 @@ build_plan() {
         local size_opt=""
         (( MIN_FILE_KB > 0 )) && size_opt="-size +${MIN_FILE_KB}k"
 
+        # Largest-first: since the loop below stops as soon as tolerance is met,
+        # feeding it biggest files first closes the gap with the fewest moves and
+        # naturally avoids ever reaching huge pools of tiny files (e.g. UrBackup's
+        # dedup pool) unless a disk's largest files genuinely aren't enough on
+        # their own.
         while IFS=$'\t' read -r fsize_b fpath; do
             # Stop if this source disk is now within tolerance
             (( D_PCT[$src] <= TARGET_PCT + TOLERANCE )) && break
@@ -418,7 +423,8 @@ build_plan() {
             # Periodic status update
             (( file_count % 200 == 0 )) && write_status
 
-        done < <(find "${src_mp}/" -type f ${size_opt} ! -path "*/lost+found/*" -printf '%s\t%p\n' 2>/dev/null)
+        done < <(find "${src_mp}/" -type f ${size_opt} ! -path "*/lost+found/*" -printf '%s\t%p\n' 2>/dev/null \
+            | sort -t$'\t' -k1,1 -rn)
 
         local src_note=""
         (( overshoot_count > 0 || unplaceable_count > 0 )) && \
