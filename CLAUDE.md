@@ -280,6 +280,31 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 15. Bug #5's own fix silently broke on quoted disks.ini values and multi-pool systems
+Bug #5's `detect_cache_pools()`/awk fix (`/^type=Cache/`) assumed `disks.ini` lines read
+`type=Cache` unquoted — but Unraid actually writes `name="ssd_cache"`/`type="Cache"` (quoted),
+so the pattern never matched and every run silently fell through to the original hardcoded
+`/mnt/cache/.rebalance_stage` fallback the fix was meant to replace. Undetected because that
+fallback path doesn't error — `/mnt` itself is a real (if RAM-backed, ~16GB) writable
+filesystem, so `mkdir -p` just quietly created an ordinary folder there, and small/throttled
+staging activity never filled it enough to fail loudly. Surfaced only when Unraid's own Fix
+Common Problems flagged the resulting stray top-level `/mnt/cache` folder as an "invalid
+folder within /mnt".
+
+A second, independent gap in the same fix: on a multi-pool system, `disks.ini` also tags the
+boot-mirror pool's slots `name="boot"`/`name="boot2"` with `type="Cache"`, appearing *before*
+any real (renamed) cache pool in file order — so even a quote-aware first-match fix would
+have resolved to `boot`/`boot2` instead of the actual cache pool. Neither corresponds to a
+real `/mnt/boot*` mount, so the original code's own `-d "/mnt/$_cache_name"` safety check
+would have (correctly) rejected them — but with no fallback to keep searching, it just fell
+through to the same broken `/mnt/cache` default anyway.
+
+Fix: walk *every* `type=Cache` candidate in `disks.ini` order (matching `$2 ~ /Cache/` so
+surrounding quotes don't matter), stripping quotes from each candidate name, and pick the
+first one that's an actual mounted `/mnt/<name>` directory — rather than trusting the first
+`type=Cache` match blindly. Falls back to the original hardcoded `/mnt/cache` path only if
+no candidate resolves to a real mount at all.
+
 ### 14. Cache-assisted mode's staging buffer was a fixed guess — now auto-sized dynamically
 `--cache-buffer` was previously either the fixed 100GB default or an explicit manual value,
 with no relationship to what a given plan actually needed or what the cache pool could

@@ -46,15 +46,22 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
-# If no --stage-dir supplied, auto-detect the cache pool from Unraid's disk info
+# If no --stage-dir supplied, auto-detect the cache pool from Unraid's disk info.
+# disks.ini quotes its values (name="ssd_cache", type="Cache") and, on multi-pool
+# systems, ALSO tags the boot-mirror pool's slots (name="boot"/"boot2") as
+# type="Cache" ahead of any real, renamed cache pool in file order -- so this
+# walks every type=Cache candidate in order and picks the first one that's an
+# actual mounted /mnt directory, rather than trusting the first match blindly.
 if [[ -z "$STAGE_DIR" ]]; then
-    _cache_name=$(awk -F= '/^name=/{n=$2} /^type=Cache/{print n; exit}' \
-        /var/local/emhttp/disks.ini 2>/dev/null | tr -d '[:space:]')
-    if [[ -n "$_cache_name" && -d "/mnt/$_cache_name" ]]; then
-        STAGE_DIR="/mnt/${_cache_name}/.rebalance_stage"
-    else
-        STAGE_DIR="/mnt/cache/.rebalance_stage"
-    fi
+    STAGE_DIR="/mnt/cache/.rebalance_stage"  # fallback if no candidate resolves
+    while IFS= read -r _cache_name; do
+        _cache_name="${_cache_name//\"/}"
+        if [[ -n "$_cache_name" && -d "/mnt/$_cache_name" ]]; then
+            STAGE_DIR="/mnt/${_cache_name}/.rebalance_stage"
+            break
+        fi
+    done < <(awk -F= '/^name=/{n=$2} /^type=/{if ($2 ~ /Cache/) print n}' \
+        /var/local/emhttp/disks.ini 2>/dev/null)
 fi
 
 ##############################################################################
