@@ -597,6 +597,24 @@ files. Not the same surface as bug #10 (native Plugins → Installed
 Plugins tab, which reads our local `.plg` `icon=` attribute directly and
 — confirmed working — renders fine).
 
+**Status check 2026-09-29: the repo was never added to CA's repository list.** This is the
+real remaining blocker; the spec fix alone can't get it indexed.
+- `https://raw.githubusercontent.com/Squidly271/Community-Applications-Moderators/master/Repositories.json`
+  (813 entries) has **no** `Esteban4u` entry. CA only indexes templates from repositories on
+  that list, and a moderator has to add it.
+- CA's live feed (`Squidly271/AppFeed/master/applicationFeed.json`, updated 2026-09-29 20:12)
+  has no Esteban4u plugin. It *does* list a different, unrelated plugin, **"Array Rebalance"
+  by FugginOld** (`FugginOld/Unraid-Rebalance`). Worth knowing for naming/differentiation.
+- Forum thread: no posts since JorgeB's 2026-09-06 redirect to the product.unraid.net
+  "Community Apps Submission Support" board.
+- Steve's 2026-09-11 post there
+  (`product.unraid.net/p/rebalance-plugin-not-indexed-in-ca-feed-despite-spec-compliance-fix-applied-4-months-ago`)
+  still can't be read by WebFetch (client-rendered shell only), so its status and replies need
+  a browser.
+- Suggested next step: follow up on that post (or post anew) with a concrete ask. "Please add
+  repository `https://github.com/Esteban4u/ReBalance` to CA's `Repositories.json`" is more
+  actionable than "why isn't it indexed". Alternatively mention @Squidly271 on the closed PR #2.
+
 - **GitHub repo:** https://github.com/Esteban4u/ReBalance
 - **CA XML template:** `ReBalance.xml` in repo root
 - **Forum thread:** https://forums.unraid.net/topic/198334-rebalance-array-disk-usage-balancer/
