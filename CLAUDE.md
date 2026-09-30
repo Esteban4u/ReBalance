@@ -280,6 +280,57 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 16. Destination directories were created root:root 755, locking the apps out of moved files
+Every move path (`execute_plan`, `execute_plan_cached` step 3, and the cache-full direct
+fallback) ran `mkdir -p "$dst_dir"` as root before `rsync -aX`. rsync preserves the moved
+**file's** owner/mode, but any directory `mkdir -p` had to create on the destination disk came
+out `root:root 755` (or with root's umask). The containers run as `nobody:users` (UID 99), so
+in those directories they could read but not rename, replace or delete.
+
+Found 2026-09-29 on Steve's server, when UrBackup's retention failed with "Permission denied …
+Cannot delete image because incremental image backup referencing this image cannot be
+deleted". The image's folder had been created on disk7 by the 2026-09-14 run.
+- A scan found 228 root-owned, non-world-writable directories holding files in `data`, and
+  15 in `backups`. Examples: movie folders from the 09-11/09-14 runs (Radarr couldn't
+  upgrade or delete them) and UrBackup image folders.
+- Some root-owned music folders date from April, before ReBalance existed, so another
+  root-run tool also contributed. This bug is the ongoing source.
+
+Fix: new `mkdir_like <src_dir> <dst_dir>` helper, used at all three call sites instead of
+`mkdir -p`.
+- It walks the destination path. For each **missing** component it `mkdir`s it, then
+  `chown --reference` / `chmod --reference` from the directory at the same relative path on
+  the source disk. That works because `P_DST` is always `D_MOUNT[best]/<rel>` with the same
+  `<rel>` as the source.
+- Components that already exist are left alone.
+- If there's no source counterpart, it falls back to `nobody:users 0777`.
+- On failure it only logs; the existing rsync-failure path does the cleanup, so a failed
+  mkdir can't strand a staged copy on the cache.
+- Staging directories on the cache still use `mkdir -p`; they're temporary and removed after
+  each move.
+
+Tested on the server in scratch roots `/mnt/rbtestA` → `/mnt/rbtestB` (RAM-backed rootfs, not
+the array): owner/mode copied exactly (including `2775` setgid and `steve:users 750`),
+pre-existing dirs untouched, the no-source fallback gives `nobody:users 777`, names with spaces
+work, and a repeat call is a no-op. A post-deploy `--dry-run --min-file-kb 52428800` ran clean.
+
+Existing damage on Steve's server was repaired separately (ownership reset on root-owned
+directories in the content shares, with a manifest for undo). See
+`Personal-Scripts/UnRaid-Troubleshooting` 2026-09-29.
+
+**Deployment gotcha found at the same time:** live-copying files into
+`/usr/local/emhttp/plugins/rebalance/` (as done 2026-09-11) does **not** survive a reboot.
+- At boot the plg re-extracts `/boot/config/plugins/rebalance/rebalance.tar.gz`. If its MD5
+  doesn't match the plg's `<MD5>`, it re-downloads the release tarball from `<URL>`.
+- So after the 2026-09-26 reboot the server was back on the 2026.09.05 build, having lost
+  #13-#15.
+- A persistent **local** deploy must: rebuild the tarball, replace it on flash, update `<MD5>`
+  in `/boot/config/plugins/rebalance.plg`, then extract it live exactly as the plg does.
+- Done 2026-09-29 (backups `*.bak-20260929`). The plg version was left at `2026.09.05`, so no
+  update prompt.
+- **Still to do for other users**: publish a proper GitHub release (new version, changelog,
+  MD5, URL) per "How to build and deploy". Not done, since it's a public release.
+
 ### 15. Bug #5's own fix silently broke on quoted disks.ini values and multi-pool systems
 Bug #5's `detect_cache_pools()`/awk fix (`/^type=Cache/`) assumed `disks.ini` lines read
 `type=Cache` unquoted — but Unraid actually writes `name="ssd_cache"`/`type="Cache"` (quoted),

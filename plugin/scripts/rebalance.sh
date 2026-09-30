@@ -171,6 +171,36 @@ is_in_use() {
     return 1
 }
 
+# mkdir_like <src_dir> <dst_dir>
+# Create dst_dir and any missing parents, copying owner, group and mode from the
+# directory at the same relative path on the source disk. A plain `mkdir -p` as
+# root left new directories root:root 755, which the apps (nobody:users) can't
+# write to: Sonarr/Radarr/Lidarr couldn't upgrade or delete moved files, and
+# UrBackup couldn't delete moved images. rsync -aX only preserves the file itself.
+mkdir_like() {
+    local src_dir="$1" dst_dir="$2"
+    [[ -d "$dst_dir" ]] && return 0
+    local src_root dst_root rel
+    src_root="/mnt/$(cut -d/ -f3 <<< "$src_dir")"   # /mnt/diskY
+    dst_root="/mnt/$(cut -d/ -f3 <<< "$dst_dir")"   # /mnt/diskX
+    rel="${dst_dir#"$dst_root"/}"
+    local path="$dst_root" ref="$src_root" part parts
+    IFS=/ read -ra parts <<< "$rel"
+    for part in "${parts[@]}"; do
+        [[ -z "$part" ]] && continue
+        path="$path/$part"; ref="$ref/$part"
+        [[ -d "$path" ]] && continue
+        mkdir "$path" || return 1
+        if [[ -d "$ref" ]]; then
+            chown --reference="$ref" "$path" 2>/dev/null
+            chmod --reference="$ref" "$path" 2>/dev/null
+        else
+            chown nobody:users "$path" 2>/dev/null
+            chmod 0777 "$path" 2>/dev/null
+        fi
+    done
+}
+
 ##############################################################################
 # Status JSON writer (atomic via temp file)
 ##############################################################################
@@ -635,7 +665,7 @@ execute_plan_cached() {
             if ! _cache_has_space "$size_kb"; then
                 log "WARN: cache buffer full — moving $(basename "$src") directly"
                 # Fall back to direct move for this file
-                mkdir -p "$dst_dir"
+                mkdir_like "$(dirname "$src")" "$dst_dir" || log "ERROR: could not create $dst_dir (rsync below will fail and clean up)"
                 local adf; adf=$(df -k "$dst_dir" 2>/dev/null | awk 'NR==2{print $4}')
                 if [[ -n "$adf" && "$adf" -lt "$size_kb" ]]; then
                     log "SKIP (no space on dest): $(basename "$src")"
@@ -695,7 +725,7 @@ execute_plan_cached() {
 
         log "Moving ($(fmt_kb $size_kb)): $(basename "$src")  →  ${dst_dir#/mnt/}/"
         P_STATUS[$i]="moving"
-        mkdir -p "$dst_dir"
+        mkdir_like "$(dirname "$src")" "$dst_dir" || log "ERROR: could not create $dst_dir (rsync below will fail and clean up)"
 
         # rsync from cache to dest; then remove source and staged copy
         if rsync -aX "$staged" "$dst_dir/" 2>/dev/null; then
@@ -771,7 +801,7 @@ execute_plan() {
         # --- Execute ---
         log "Moving ($(fmt_kb $size_kb)): $(basename "$src")  →  $(basename "$dst_dir" | sed 's|^/mnt/||')/"
         P_STATUS[$i]="moving"
-        mkdir -p "$dst_dir"
+        mkdir_like "$(dirname "$src")" "$dst_dir" || log "ERROR: could not create $dst_dir (rsync below will fail and clean up)"
 
         if rsync -aX --remove-source-files "$src" "${dst_dir}/" 2>/dev/null; then
             P_STATUS[$i]="done"
