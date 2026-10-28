@@ -106,8 +106,10 @@ FILES_DONE=0
 FILES_SKIPPED=0
 FILES_OVERSHOOT=0     # planned onto a disk that ends up over target+tolerance (no strict-fit disk existed)
 FILES_UNPLACEABLE=0   # no disk (not even an overshoot candidate) had room for this file
+FILES_HARDLINKED=0    # skipped at planning because the file has more than one hardlink
 BYTES_TOTAL=0    # KB
 BYTES_DONE=0     # KB
+CURRENT_KB_DONE=0  # KB of the in-flight file already written (set by the status ticker)
 RATE_KBS=0
 ETA_SEC=0
 CURRENT_FILE=""
@@ -119,6 +121,7 @@ LOG_MSGS=()
 # Cleanup on exit / signal
 ##############################################################################
 _on_exit() {
+    _ticker_stop
     [[ "$STATE" == "running" || "$STATE" == "planning" ]] && STATE="stopped"
     CURRENT_FILE=""
     write_status
@@ -169,6 +172,16 @@ is_in_use() {
         lsof "$f" >/dev/null 2>&1 && return 0
     fi
     return 1
+}
+
+# A file with more than one hardlink can't be moved to another disk as a unit:
+# rsync copies this one name, the other names keep the original data on the
+# source disk, so the file ends up stored twice and the source frees nothing.
+# UrBackup file backups and *arr/torrent setups hardlink heavily.
+is_hardlinked() {
+    local n
+    n=$(stat -c %h "$1" 2>/dev/null) || return 1
+    (( n > 1 ))
 }
 
 # mkdir_like <src_dir> <dst_dir>
@@ -248,7 +261,7 @@ write_status() {
     pj+="]"
 
     local pct_done=0
-    (( BYTES_TOTAL > 0 )) && pct_done=$(( BYTES_DONE * 100 / BYTES_TOTAL ))
+    (( BYTES_TOTAL > 0 )) && pct_done=$(( (BYTES_DONE + CURRENT_KB_DONE) * 100 / BYTES_TOTAL ))
 
     # --- cache staging stats ---
     local stage_kb=0
@@ -275,8 +288,10 @@ write_status() {
     "files_skipped": ${FILES_SKIPPED},
     "files_overshoot": ${FILES_OVERSHOOT},
     "files_unplaceable": ${FILES_UNPLACEABLE},
+    "files_hardlinked": ${FILES_HARDLINKED},
     "bytes_total_kb": ${BYTES_TOTAL},
     "bytes_done_kb": ${BYTES_DONE},
+    "current_kb_done": ${CURRENT_KB_DONE},
     "pct_done": ${pct_done},
     "rate_kbs": ${RATE_KBS},
     "eta_sec": ${ETA_SEC}
@@ -290,6 +305,53 @@ write_status() {
 }
 EOF
     mv "$tmp" "$STATUS_FILE"
+}
+
+##############################################################################
+# Status ticker
+#
+# Status is otherwise only written between files, so while one large file
+# copied (a 533 GB image took ~4 h) the UI sat frozen at the same %.
+# _ticker_start forks a subshell that rewrites the status file every 5 s for
+# the duration of one rsync. The fork's copy of the counters is exactly right
+# for that window, since nothing else changes until the rsync returns. It adds
+# the size of rsync's in-progress temp file (.<name>.XXXXXX in <dir>) so
+# pct_done, rate and ETA keep moving within the file. An empty <dir> refreshes
+# status without counting partial bytes (staging isn't progress toward
+# BYTES_DONE). Must be called from an executor: _update_rate reaches the
+# executor's rate_t0/rate_b0 locals through bash's dynamic scoping.
+##############################################################################
+TICKER_PID=""
+_ticker_start() {
+    local dir="$1" name="$2"
+    (
+        trap - EXIT
+        local stop=0 pat part
+        trap 'stop=1' TERM
+        pat=$(sed 's/[][*?\\]/\\&/g' <<< "$name")
+        # `sleep & wait` rather than plain sleep: a trapped signal interrupts
+        # wait at once, so stopping the ticker after a small file is instant
+        while (( ! stop )) && kill -0 $$ 2>/dev/null; do
+            sleep 5 & wait $!
+            (( stop )) && { kill $! 2>/dev/null; break; }
+            if [[ -n "$dir" ]]; then
+                part=$(find "$dir" -maxdepth 1 -type f -name ".${pat}.*" -printf '%k\n' 2>/dev/null | sort -rn | head -1)
+                CURRENT_KB_DONE=${part:-0}
+            fi
+            _update_rate "$(date +%s)" rate_t0 rate_b0
+            write_status
+        done
+    ) &
+    TICKER_PID=$!
+}
+
+# Waits for the ticker to finish any status write in progress, so the next
+# write from the main loop can't be overwritten by a stale one.
+_ticker_stop() {
+    [[ -z "$TICKER_PID" ]] && return
+    kill "$TICKER_PID" 2>/dev/null
+    wait "$TICKER_PID" 2>/dev/null
+    TICKER_PID=""
 }
 
 ##############################################################################
@@ -377,6 +439,7 @@ build_plan() {
         local file_count=0
         local overshoot_count=0
         local unplaceable_count=0
+        local hardlink_count=0 hardlink_kb=0
         local size_opt=""
         (( MIN_FILE_KB > 0 )) && size_opt="-size +${MIN_FILE_KB}k"
 
@@ -385,12 +448,20 @@ build_plan() {
         # naturally avoids ever reaching huge pools of tiny files (e.g. UrBackup's
         # dedup pool) unless a disk's largest files genuinely aren't enough on
         # their own.
-        while IFS=$'\t' read -r fsize_b fpath; do
+        while IFS=$'\t' read -r fsize_b nlinks fpath; do
             # Stop if this source disk is now within tolerance
             (( D_PCT[$src] <= TARGET_PCT + TOLERANCE )) && break
 
             local fsize_kb=$(( fsize_b / 1024 ))
             (( fsize_kb == 0 )) && fsize_kb=1
+
+            # Hardlinked files can't be moved without duplicating them (see
+            # is_hardlinked). Counted, not logged per file: a UrBackup file
+            # backup can have millions of them.
+            if (( nlinks > 1 )); then
+                (( hardlink_count++ )); (( FILES_HARDLINKED++ )); (( hardlink_kb += fsize_kb ))
+                continue
+            fi
 
             # Derive the relative path and share name
             local rel="${fpath#${src_mp}/}"
@@ -463,19 +534,23 @@ build_plan() {
             # Periodic status update
             (( file_count % 200 == 0 )) && write_status
 
-        done < <(find "${src_mp}/" -type f ${size_opt} ! -path "*/lost+found/*" -printf '%s\t%p\n' 2>/dev/null \
+        done < <(find "${src_mp}/" -type f ${size_opt} ! -path "*/lost+found/*" -printf '%s\t%n\t%p\n' 2>/dev/null \
             | sort -t$'\t' -k1,1 -rn)
 
         local src_note=""
         (( overshoot_count > 0 || unplaceable_count > 0 )) && \
             src_note=" (${overshoot_count} placed via overshoot fallback, ${unplaceable_count} unplaceable)"
         log "  ${src}: planned $(fmt_kb $planned_kb) to move${src_note}"
+        (( hardlink_count > 0 )) && \
+            log "  ${src}: skipped ${hardlink_count} hardlinked files ($(fmt_kb $hardlink_kb)) — moving them would store them twice"
     done
 
     FILES_TOTAL=$P_COUNT
     local plan_note=""
     (( FILES_OVERSHOOT > 0 || FILES_UNPLACEABLE > 0 )) && \
         plan_note=" — ${FILES_OVERSHOOT} files placed via overshoot fallback, ${FILES_UNPLACEABLE} files unplaceable (see log for details)"
+    (( FILES_HARDLINKED > 0 )) && \
+        plan_note+=" — ${FILES_HARDLINKED} hardlinked files skipped"
     log "Plan complete: ${P_COUNT} files, $(fmt_kb $BYTES_TOTAL) total${plan_note}"
     write_status
 }
@@ -590,15 +665,16 @@ _update_rate() {
     local now="$1"
     local -n _rt0=$2 _rb0=$3
     local elapsed=$(( now - START_TIME ))
-    if (( elapsed > 0 && BYTES_DONE > 0 )); then
+    local done_kb=$(( BYTES_DONE + CURRENT_KB_DONE ))
+    if (( elapsed > 0 && done_kb > 0 )); then
         local window=$(( now - _rt0 ))
         if (( window >= 30 )); then
-            (( window > 0 )) && RATE_KBS=$(( (BYTES_DONE - _rb0) / window ))
-            if (( window >= 60 )); then _rt0=$now; _rb0=$BYTES_DONE; fi
+            (( window > 0 )) && RATE_KBS=$(( (done_kb - _rb0) / window ))
+            if (( window >= 60 )); then _rt0=$now; _rb0=$done_kb; fi
         else
-            RATE_KBS=$(( BYTES_DONE / elapsed ))
+            RATE_KBS=$(( done_kb / elapsed ))
         fi
-        (( RATE_KBS > 0 )) && ETA_SEC=$(( (BYTES_TOTAL - BYTES_DONE) / RATE_KBS )) || ETA_SEC=0
+        (( RATE_KBS > 0 )) && ETA_SEC=$(( (BYTES_TOTAL - done_kb) / RATE_KBS )) || ETA_SEC=0
     fi
 }
 
@@ -643,6 +719,19 @@ execute_plan_cached() {
 
         CURRENT_FILE="$src"
 
+        # Re-check hardlinks: one may have been added since planning (e.g. an
+        # *arr import). The lookahead never stages a hardlinked file, so only
+        # a pre-stage started before the link appeared needs clearing up.
+        if [[ -f "$src" ]] && is_hardlinked "$src"; then
+            log "SKIP (hardlinked): $(basename "$src")"
+            if [[ "$pre_src" == "$src" && -n "$pre_pid" ]]; then
+                wait "$pre_pid" 2>/dev/null
+                pre_pid=""; pre_src=""; pre_staged=""
+                rm -f "$staged"; find "$staged_dir" -mindepth 1 -type d -empty -delete 2>/dev/null
+            fi
+            P_STATUS[$i]="skipped"; (( FILES_SKIPPED++ )); continue
+        fi
+
         # ── Step 1: Ensure this file is in the staging area ────────────────
         if [[ "$pre_src" == "$src" && -n "$pre_pid" ]]; then
             # Already being staged by the background lookahead job — wait for it
@@ -672,7 +761,10 @@ execute_plan_cached() {
                     P_STATUS[$i]="skipped"; (( FILES_SKIPPED++ )); continue
                 fi
                 P_STATUS[$i]="moving"
-                if rsync -aX --remove-source-files "$src" "$dst_dir/" 2>/dev/null; then
+                _ticker_start "$dst_dir" "$(basename "$src")"
+                rsync -aX --remove-source-files "$src" "$dst_dir/" 2>/dev/null; local frc=$?
+                _ticker_stop
+                if (( frc == 0 )); then
                     P_STATUS[$i]="done"; (( FILES_DONE++ )); (( BYTES_DONE += size_kb ))
                     find "$(dirname "$src")" -mindepth 1 -type d -empty -delete 2>/dev/null
                 else
@@ -683,7 +775,10 @@ execute_plan_cached() {
             fi
             log "Staging: $(basename "$src") ($(fmt_kb $size_kb))"
             mkdir -p "$staged_dir"
-            if ! rsync -a "$src" "$staged_dir/" 2>/dev/null; then
+            _ticker_start "" ""
+            rsync -aX "$src" "$staged_dir/" 2>/dev/null; local src_rc=$?
+            _ticker_stop
+            if (( src_rc != 0 )); then
                 log "ERROR: staging failed — $(basename "$src")"
                 P_STATUS[$i]="error"; (( FILES_SKIPPED++ )); continue
             fi
@@ -700,9 +795,13 @@ execute_plan_cached() {
             local ndn="${nsrc#/mnt/}"; ndn="${ndn%%/*}"
             local nstaged="$STAGE_DIR/${nsrc#/mnt/$ndn/}"
             local nstaged_dir; nstaged_dir=$(dirname "$nstaged")
-            if [[ -f "$nsrc" ]] && _cache_has_space "$(( size_kb + nsz ))"; then
+            # Only the next file's size: _cache_has_space already counts the
+            # current file, which is sitting in the staging dir. Passing
+            # size_kb + nsz counted it twice, so the lookahead was skipped for
+            # exactly the big files where the overlap matters most.
+            if [[ -f "$nsrc" ]] && ! is_hardlinked "$nsrc" && _cache_has_space "$nsz"; then
                 mkdir -p "$nstaged_dir"
-                rsync -a "$nsrc" "$nstaged_dir/" 2>/dev/null &
+                rsync -aX "$nsrc" "$nstaged_dir/" 2>/dev/null &
                 pre_pid=$!; pre_src="$nsrc"; pre_staged="$nstaged"
             fi
         fi
@@ -728,7 +827,10 @@ execute_plan_cached() {
         mkdir_like "$(dirname "$src")" "$dst_dir" || log "ERROR: could not create $dst_dir (rsync below will fail and clean up)"
 
         # rsync from cache to dest; then remove source and staged copy
-        if rsync -aX "$staged" "$dst_dir/" 2>/dev/null; then
+        _ticker_start "$dst_dir" "$(basename "$staged")"
+        rsync -aX "$staged" "$dst_dir/" 2>/dev/null; local mrc=$?
+        _ticker_stop
+        if (( mrc == 0 )); then
             rm -f "$src"                # remove original (file safely on dest)
             rm -f "$staged"             # remove staged copy
             find "$staged_dir"    -mindepth 1 -type d -empty -delete 2>/dev/null
@@ -790,6 +892,12 @@ execute_plan() {
             P_STATUS[$i]="skipped"; (( FILES_SKIPPED++ )); continue
         fi
 
+        # A hardlink may have been added since planning (e.g. an *arr import)
+        if is_hardlinked "$src"; then
+            log "SKIP (hardlinked): $(basename "$src")"
+            P_STATUS[$i]="skipped"; (( FILES_SKIPPED++ )); continue
+        fi
+
         # Re-verify actual free space (plan may be stale)
         local actual_free
         actual_free=$(df -k "$dst_dir" 2>/dev/null | awk 'NR==2{print $4}')
@@ -803,7 +911,10 @@ execute_plan() {
         P_STATUS[$i]="moving"
         mkdir_like "$(dirname "$src")" "$dst_dir" || log "ERROR: could not create $dst_dir (rsync below will fail and clean up)"
 
-        if rsync -aX --remove-source-files "$src" "${dst_dir}/" 2>/dev/null; then
+        _ticker_start "$dst_dir" "$(basename "$src")"
+        rsync -aX --remove-source-files "$src" "${dst_dir}/" 2>/dev/null; local rc=$?
+        _ticker_stop
+        if (( rc == 0 )); then
             P_STATUS[$i]="done"
             (( FILES_DONE++ ))
             (( BYTES_DONE += size_kb ))

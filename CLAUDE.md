@@ -280,6 +280,59 @@ placements and true unplaceables are now counted (`FILES_OVERSHOOT`,
 in the final "Plan complete" line, and surfaced in the UI as a new
 "Placement Issues" stat card (only shown when non-zero).
 
+### 17-20. Found during the 2026-10-23 real run (86 files, ~3 TB, 17 h)
+
+**17. Hardlinked files were split, storing them twice.** `rsync -aX` copies one name. Any other
+hardlinks to the same file stay on the source disk with the original data. So the source frees
+nothing, and the destination gets a second full copy. UrBackup file backups hardlink unchanged
+files between backups, and *arr/torrent setups hardlink downloads into the media library.
+- On this run, 5 same-size groups among the moved files (UrBackup `.directory_pool` and
+  DXCache files, about 30 GB at most) were probably split this way.
+- Fix: planning reads the link count (`find -printf '%s\t%n\t%p\n'`) and skips files with
+  `nlink > 1`. Skips are counted, not logged per file, since UrBackup pools hold millions.
+  They're summarised per source disk and in "Plan complete", and exposed as
+  `stats.files_hardlinked`.
+- Both executors re-check with `is_hardlinked` just before moving, since a link may have been
+  added since planning. The lookahead never pre-stages a hardlinked file.
+
+**18. Status froze for the whole of each file.** Status was only written between files. Each
+copy ran as a foreground rsync, so a 533 GB image showed the same % for ~4 h, and the
+log/elapsed time looked hung.
+- Fix: `_ticker_start`/`_ticker_stop` around every rsync. The ticker is a forked subshell that
+  rewrites status every 5 s. Its copy of the counters is correct for that window, because
+  nothing else changes until the rsync returns.
+- It adds the size of rsync's temp file (`.<name>.XXXXXX` in the destination dir) as
+  `CURRENT_KB_DONE`, so `pct_done`, rate and ETA move within a file. Staging passes an empty
+  dir: status refreshes, but staging doesn't count as progress.
+- It waits with `sleep 5 & wait`, so a trapped TERM stops it at once (about 45 ms per small
+  file). `_ticker_stop` waits for any write in progress, so a stale status can't land after a
+  newer one. `_on_exit` stops it too, and it exits within 5 s if the main script dies.
+
+**19. Lookahead pre-stage counted the current file twice.** `_cache_has_space` already
+includes everything in the staging dir, which holds the current file. The lookahead passed
+`size_kb + nsz` anyway, so it went over budget exactly when files were big.
+- Effect on this run: the 533 GB file's 4 h write happened with nothing staging in parallel.
+- Fix: pass `nsz` only.
+
+**20. Staging dropped extended attributes.** The source → cache copies (blocking and
+lookahead) used `rsync -a`, so the later `rsync -aX` to the destination had no xattrs to
+carry. Fix: `-aX` on both.
+
+Tested on the server against a functions-only copy of the script, with the status and lock
+files pointed at a scratch path in RAM-backed `/tmp`:
+- hardlink detection, and the `%n` parse with spaces/brackets in names
+- `pct_done` advancing within one rate-limited 1.2 GB rsync
+- 10 small files with the ticker in 451 ms
+- the ticker exiting after its parent is SIGKILLed
+- the lookahead budget check, and xattrs surviving stage + move
+
+Not yet run end-to-end on the array.
+
+**Also noticed on this run, not a bug:** the array's weighted average went from 54% to 55.8%
+during the 17 h run, mostly from a 384 GB overnight UrBackup image plus ~127 GB of new
+downloads. The plan targets the start-of-run average, so the source disks finished 3-7 points
+above it while the destinations landed on it. See "Multi-pass planning" in future improvements.
+
 ### 16. Destination directories were created root:root 755, locking the apps out of moved files
 Every move path (`execute_plan`, `execute_plan_cached` step 3, and the cache-full direct
 fallback) ran `mkdir -p "$dst_dir"` as root before `rsync -aX`. rsync preserves the moved
@@ -512,8 +565,10 @@ conversion changed to `bufGB * 1024 * 1024`.
 | `stats.files_total` | int | same as plan_count after planning |
 | `stats.files_overshoot` | int | files placed via the overshoot fallback (see bug #11) — moved anyway to the least-bad disk despite exceeding tolerance |
 | `stats.files_unplaceable` | int | files with no destination at all (not even an overshoot candidate) — left unmoved |
+| `stats.files_hardlinked` | int | files skipped at planning because they have more than one hardlink (see bug #17) |
 | `stats.bytes_total_kb` | int | total KB to move |
-| `stats.pct_done` | int | execution progress % |
+| `stats.current_kb_done` | int | KB of the in-flight file written so far (status ticker, bug #18) |
+| `stats.pct_done` | int | execution progress %, including the in-flight file |
 | `disks` | array | per-disk name/size/used/free/pct/role |
 | `plan` | array | first 300 planned moves (status/kb/src/dst) |
 | `log` | array | last 100 log entries ({t, m}) |
@@ -640,6 +695,11 @@ create a new GitHub Release with the tarball, update the `<URL>` in `rebalance.p
   20 data disks, target 54% ±2%): only disk6 (57%) needed correction. Used as the validation
   case for both #13 (largest-first sort) and #14 (dynamic cache buffer) above — resolved in a
   single 135GB file move once sorted, landing disk6 exactly at the 54% target.
+- **Real run completed 2026-10-23/24**: 86 files, ~3 TB, 0 skipped or failed, 17 h 17 min, with SSD cache
+  staging and Min file size 0. It went from 34-79% to 53-65%. Overshoots landed disk13 at 65%
+  and disk7 at 62%. Array writes ran ~40-55 MB/s with dual parity in `auto` (read/modify/write)
+  and ~120 MB/s after switching to reconstruct write (`emcmd "changeDisk=Apply&md_write_method=1"`,
+  set back to `auto` at the end). Found bugs #17-#20.
 - All disks formatted XFS
 
 ---
